@@ -237,7 +237,13 @@ def transcribe_words(
 
     try:
         import whisperx
+    except Exception as exc:
+        raise RuntimeError(
+            "WhisperX alignment requested but whisperx is not available. "
+            "Install it in this environment: pip install whisperx"
+        ) from exc
 
+    try:
         audio = whisperx.load_audio(str(audio_path_16k))
         align_model, metadata = whisperx.load_align_model(language_code=info.language, device=device)
 
@@ -290,13 +296,15 @@ def transcribe_words(
             print(f"WhisperX alignment applied for {audio_path_16k.name}: {len(aligned_words)} words")
             return aligned_words
 
-        print(f"WARNING: WhisperX returned no aligned words for {audio_path_16k.name}; using faster-whisper words")
-        return words
+        raise RuntimeError(
+            f"WhisperX returned no aligned words for {audio_path_16k.name}. "
+            "Stopping run because --use_whisperx_align is enabled."
+        )
     except Exception as exc:
-        print(f"WARNING: WhisperX alignment failed for {audio_path_16k.name}: {exc}")
-        print("Falling back to faster-whisper word timestamps")
-
-    return words
+        raise RuntimeError(
+            f"WhisperX alignment failed for {audio_path_16k.name}: {exc}. "
+            "Stopping run because --use_whisperx_align is enabled."
+        ) from exc
 
 
 def split_into_segments(words: list[WordItem], cfg: SegmentConfig) -> list[tuple[int, int]]:

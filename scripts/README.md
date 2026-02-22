@@ -29,7 +29,8 @@ Optional:
 - enable WhisperX boundary refinement with `--use_whisperx_align`
 
 WhisperX notes:
-- WhisperX is optional; if unavailable or alignment fails, script falls back to faster-whisper timestamps.
+- WhisperX is optional, but if `--use_whisperx_align` is enabled the run is fail-fast.
+- If WhisperX is unavailable or alignment fails, the script stops with an explicit error.
 - Install manually when needed:
 
 ```bash
