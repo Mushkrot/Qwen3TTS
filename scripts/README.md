@@ -1,6 +1,28 @@
 # Scripts
 
-This folder contains helper scripts for the first Qwen3-TTS 0.6B cycle.
+This folder contains helper scripts for Qwen3TTS training and dataset preparation.
+
+## Automated dataset builder (input audio -> train_raw.jsonl)
+
+Build a dataset from raw audio files with pause-based chunking and word-level ASR:
+
+```bash
+source .venv/bin/activate
+python scripts/build_dataset_from_audio.py \
+  --input_dir /path/to/raw_audio \
+  --output_root experiments/qwen3_ru_en_speaker_v1/dataset_auto \
+  --language ru \
+  --validate_manifest
+```
+
+Output:
+- chunks: `.../dataset_auto/chunks/*.wav` (24k mono)
+- transcripts: `.../dataset_auto/transcripts/*.txt`
+- manifest: `.../dataset_auto/manifests/train_raw.jsonl`
+
+Optional:
+- pass fixed reference voice with `--ref_audio /path/to/ref.wav`
+- tune segmentation thresholds with `--min_pause`, `--target_duration`, `--max_duration`
 
 ## Validation
 

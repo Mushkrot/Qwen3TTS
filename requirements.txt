@@ -1,2 +1,3 @@
 qwen-tts
 soundfile
+faster-whisper
