@@ -1,0 +1,2 @@
+{"audio":"/ABS/PATH/TO/DATA/utt0001.wav","text":"Это тестовая строка для проверки пайплайна.","ref_audio":"/ABS/PATH/TO/DATA/ref.wav"}
+{"audio":"/ABS/PATH/TO/DATA/utt0002.wav","text":"She said she would be here by noon.","ref_audio":"/ABS/PATH/TO/DATA/ref.wav"}
