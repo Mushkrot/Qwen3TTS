@@ -76,6 +76,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--asr_model", default="large-v3", help="faster-whisper model size/name")
     parser.add_argument("--device", default="cuda", help="ASR device, e.g. cuda or cpu")
     parser.add_argument("--compute_type", default="float16", help="ASR compute type")
+    parser.add_argument(
+        "--use_whisperx_align",
+        action="store_true",
+        help="Refine word start/end timestamps with WhisperX alignment (optional dependency)",
+    )
+    parser.add_argument(
+        "--whisperx_interpolate_method",
+        default="linear",
+        help="Interpolation method for WhisperX align (e.g. linear, nearest)",
+    )
     parser.add_argument("--beam_size", type=int, default=5)
     parser.add_argument("--best_of", type=int, default=5)
     parser.add_argument("--temperature", type=float, default=0.1)
@@ -192,8 +202,11 @@ def transcribe_words(
     beam_size: int,
     best_of: int,
     temperature: float,
+    use_whisperx_align: bool,
+    device: str,
+    whisperx_interpolate_method: str,
 ) -> list[WordItem]:
-    segments, _info = model.transcribe(
+    segments, info = model.transcribe(
         str(audio_path_16k),
         language=language,
         beam_size=beam_size,
@@ -204,6 +217,7 @@ def transcribe_words(
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 400, "speech_pad_ms": 300},
     )
+    segments = list(segments)
 
     words: list[WordItem] = []
     for segment in segments:
@@ -217,6 +231,70 @@ def transcribe_words(
                 continue
             confidence = float(getattr(w, "probability", 1.0) or 1.0)
             words.append(WordItem(token=token, start=float(w.start), end=float(w.end), confidence=confidence))
+
+    if not use_whisperx_align:
+        return words
+
+    try:
+        import whisperx
+
+        audio = whisperx.load_audio(str(audio_path_16k))
+        align_model, metadata = whisperx.load_align_model(language_code=info.language, device=device)
+
+        segments_dict = []
+        for segment in segments:
+            seg = {
+                "start": float(segment.start),
+                "end": float(segment.end),
+                "text": str(segment.text),
+            }
+            if getattr(segment, "words", None):
+                seg["words"] = [
+                    {
+                        "word": str(w.word),
+                        "start": float(w.start) if w.start is not None else None,
+                        "end": float(w.end) if w.end is not None else None,
+                    }
+                    for w in segment.words
+                ]
+            segments_dict.append(seg)
+
+        aligned = whisperx.align(
+            segments_dict,
+            align_model,
+            metadata,
+            audio,
+            device,
+            return_char_alignments=False,
+            interpolate_method=whisperx_interpolate_method,
+        )
+
+        aligned_words: list[WordItem] = []
+        base_confidences = [w.confidence for w in words]
+        conf_idx = 0
+        for seg in aligned.get("segments", []):
+            for w in seg.get("words", []):
+                token = clean_token(str(w.get("word", "")))
+                start = w.get("start")
+                end = w.get("end")
+                if not token or start is None or end is None:
+                    continue
+
+                confidence = base_confidences[conf_idx] if conf_idx < len(base_confidences) else 1.0
+                conf_idx += 1
+                aligned_words.append(
+                    WordItem(token=token, start=float(start), end=float(end), confidence=float(confidence))
+                )
+
+        if aligned_words:
+            print(f"WhisperX alignment applied for {audio_path_16k.name}: {len(aligned_words)} words")
+            return aligned_words
+
+        print(f"WARNING: WhisperX returned no aligned words for {audio_path_16k.name}; using faster-whisper words")
+        return words
+    except Exception as exc:
+        print(f"WARNING: WhisperX alignment failed for {audio_path_16k.name}: {exc}")
+        print("Falling back to faster-whisper word timestamps")
 
     return words
 
@@ -402,6 +480,9 @@ def main() -> int:
             beam_size=args.beam_size,
             best_of=args.best_of,
             temperature=args.temperature,
+            use_whisperx_align=args.use_whisperx_align,
+            device=args.device,
+            whisperx_interpolate_method=args.whisperx_interpolate_method,
         )
 
         if not words:

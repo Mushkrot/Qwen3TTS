@@ -12,6 +12,7 @@ python scripts/build_dataset_from_audio.py \
   --input_dir /path/to/raw_audio \
   --output_root experiments/qwen3_ru_en_speaker_v1/dataset_auto \
   --language ru \
+  --use_whisperx_align \
   --validate_manifest
 ```
 
@@ -25,6 +26,16 @@ Optional:
 - pass fixed reference voice with `--ref_audio /path/to/ref.wav`
 - tune segmentation thresholds with `--min_pause`, `--target_duration`, `--max_duration`
 - tune filtering with `--min_words`, `--min_avg_confidence`, `--max_low_conf_ratio`
+- enable WhisperX boundary refinement with `--use_whisperx_align`
+
+WhisperX notes:
+- WhisperX is optional; if unavailable or alignment fails, script falls back to faster-whisper timestamps.
+- Install manually when needed:
+
+```bash
+source .venv/bin/activate
+pip install whisperx
+```
 
 ## Validation
 
