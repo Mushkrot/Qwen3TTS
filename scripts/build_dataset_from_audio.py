@@ -13,6 +13,7 @@ Pipeline:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 import subprocess
@@ -51,6 +52,18 @@ class SegmentConfig:
     soft_pause: float
 
 
+@dataclass
+class SegmentQuality:
+    word_count: int
+    avg_confidence: float
+    low_conf_ratio: float
+    reasons: list[str]
+
+    @property
+    def is_valid(self) -> bool:
+        return not self.reasons
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_dir", required=True, help="Directory with source audio files")
@@ -72,6 +85,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min_pause", type=float, default=0.45)
     parser.add_argument("--soft_pause", type=float, default=0.25)
     parser.add_argument("--min_chars", type=int, default=8)
+    parser.add_argument("--min_words", type=int, default=3)
+    parser.add_argument("--low_confidence_threshold", type=float, default=0.5)
+    parser.add_argument("--min_avg_confidence", type=float, default=0.45)
+    parser.add_argument("--max_low_conf_ratio", type=float, default=0.35)
+    parser.add_argument(
+        "--report_name",
+        default="quality_report",
+        help="Base name for quality report files in output_root/reports",
+    )
     parser.add_argument(
         "--ref_audio",
         default="",
@@ -227,6 +249,74 @@ def split_into_segments(words: list[WordItem], cfg: SegmentConfig) -> list[tuple
     return boundaries
 
 
+def evaluate_segment_quality(
+    seg_words: list[WordItem],
+    text: str,
+    duration: float,
+    args: argparse.Namespace,
+) -> SegmentQuality:
+    word_count = len(seg_words)
+    avg_confidence = sum(w.confidence for w in seg_words) / max(1, word_count)
+    low_conf_count = sum(1 for w in seg_words if w.confidence < args.low_confidence_threshold)
+    low_conf_ratio = low_conf_count / max(1, word_count)
+
+    reasons: list[str] = []
+    if duration < args.min_duration:
+        reasons.append("duration_too_short")
+    if duration > args.max_duration:
+        reasons.append("duration_too_long")
+    if len(text) < args.min_chars:
+        reasons.append("text_too_short")
+    if word_count < args.min_words:
+        reasons.append("too_few_words")
+    if avg_confidence < args.min_avg_confidence:
+        reasons.append("avg_confidence_too_low")
+    if low_conf_ratio > args.max_low_conf_ratio:
+        reasons.append("too_many_low_confidence_words")
+
+    return SegmentQuality(
+        word_count=word_count,
+        avg_confidence=avg_confidence,
+        low_conf_ratio=low_conf_ratio,
+        reasons=reasons,
+    )
+
+
+def write_quality_reports(output_root: Path, report_name: str, report_rows: list[dict[str, object]]) -> tuple[Path, Path]:
+    reports_dir = output_root / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+
+    json_path = reports_dir / f"{report_name}.json"
+    csv_path = reports_dir / f"{report_name}.csv"
+
+    with json_path.open("w", encoding="utf-8") as f:
+        json.dump(report_rows, f, ensure_ascii=False, indent=2)
+
+    fieldnames = [
+        "status",
+        "source_audio",
+        "chunk_audio",
+        "start",
+        "end",
+        "duration",
+        "word_count",
+        "avg_confidence",
+        "low_conf_ratio",
+        "reasons",
+        "text",
+    ]
+    with csv_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in report_rows:
+            csv_row = {k: row.get(k, "") for k in fieldnames}
+            if isinstance(csv_row["reasons"], list):
+                csv_row["reasons"] = ";".join(csv_row["reasons"])
+            writer.writerow(csv_row)
+
+    return json_path, csv_path
+
+
 def ensure_ref_audio(ref_audio_arg: str, output_root: Path, first_chunk: Path | None) -> Path:
     refs_dir = output_root / "refs"
     refs_dir.mkdir(parents=True, exist_ok=True)
@@ -291,6 +381,7 @@ def main() -> int:
     )
 
     rows: list[dict[str, str]] = []
+    report_rows: list[dict[str, object]] = []
     global_idx = 0
     first_chunk: Path | None = None
 
@@ -324,12 +415,25 @@ def main() -> int:
             start_sec = seg_words[0].start
             end_sec = seg_words[-1].end
             duration = end_sec - start_sec
-
-            if duration < args.min_duration or duration > args.max_duration:
-                continue
-
             text = join_tokens(w.token for w in seg_words)
-            if len(text) < args.min_chars:
+
+            quality = evaluate_segment_quality(seg_words, text, duration, args)
+            if not quality.is_valid:
+                report_rows.append(
+                    {
+                        "status": "rejected",
+                        "source_audio": str(src_audio.resolve()),
+                        "chunk_audio": "",
+                        "start": round(start_sec, 3),
+                        "end": round(end_sec, 3),
+                        "duration": round(duration, 3),
+                        "word_count": quality.word_count,
+                        "avg_confidence": round(quality.avg_confidence, 4),
+                        "low_conf_ratio": round(quality.low_conf_ratio, 4),
+                        "reasons": quality.reasons,
+                        "text": text,
+                    }
+                )
                 continue
 
             global_idx += 1
@@ -348,6 +452,21 @@ def main() -> int:
             rows.append(
                 {
                     "audio": str(chunk_path.resolve()),
+                    "text": text,
+                }
+            )
+            report_rows.append(
+                {
+                    "status": "accepted",
+                    "source_audio": str(src_audio.resolve()),
+                    "chunk_audio": str(chunk_path.resolve()),
+                    "start": round(start_sec, 3),
+                    "end": round(end_sec, 3),
+                    "duration": round(duration, 3),
+                    "word_count": quality.word_count,
+                    "avg_confidence": round(quality.avg_confidence, 4),
+                    "low_conf_ratio": round(quality.low_conf_ratio, 4),
+                    "reasons": [],
                     "text": text,
                 }
             )
@@ -371,6 +490,14 @@ def main() -> int:
     print(f"Dataset rows: {len(rows)}")
     print(f"Manifest: {manifest_path}")
     print(f"Reference audio: {ref_audio}")
+
+    report_json, report_csv = write_quality_reports(output_root, args.report_name, report_rows)
+    accepted_count = sum(1 for r in report_rows if r.get("status") == "accepted")
+    rejected_count = sum(1 for r in report_rows if r.get("status") == "rejected")
+    print(f"Accepted segments: {accepted_count}")
+    print(f"Rejected segments: {rejected_count}")
+    print(f"Quality report (json): {report_json}")
+    print(f"Quality report (csv): {report_csv}")
 
     if args.validate_manifest:
         validator = root_dir / "scripts" / "validate_manifest.py"

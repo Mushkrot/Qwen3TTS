@@ -19,10 +19,12 @@ Output:
 - chunks: `.../dataset_auto/chunks/*.wav` (24k mono)
 - transcripts: `.../dataset_auto/transcripts/*.txt`
 - manifest: `.../dataset_auto/manifests/train_raw.jsonl`
+- quality report: `.../dataset_auto/reports/quality_report.{json,csv}`
 
 Optional:
 - pass fixed reference voice with `--ref_audio /path/to/ref.wav`
 - tune segmentation thresholds with `--min_pause`, `--target_duration`, `--max_duration`
+- tune filtering with `--min_words`, `--min_avg_confidence`, `--max_low_conf_ratio`
 
 ## Validation
 
