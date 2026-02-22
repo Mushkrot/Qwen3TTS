@@ -10,6 +10,7 @@ Reference docs:
 - `docs/QWEN3TTS_IMPLEMENTATION_PLAN.md`
 - `docs/QWEN3TTS_SETUP.md`
 - `docs/DATASET_CONTRACT.md`
+- `docs/EVAL_PHRASE_SET.md`
 - `docs/VOICE_CLONING_DEEP_RESEARCH_SINCE_2025-09.md`
 - `docs/VOICE_CLONING_PROJECTS_AUDIT_2026-02-21.md`
 
@@ -18,8 +19,10 @@ Reference docs:
 ## Current decisions
 
 - Primary stack: Qwen3-TTS.
-- Baseline model for first run: `Qwen/Qwen3-TTS-12Hz-0.6B-Base`.
-- 1.7B model is deferred until setup + first 0.6B cycle is stable.
+- Active training track: `Qwen/Qwen3-TTS-12Hz-1.7B-Base`.
+- `0.6B` currently in separate debug track due shape mismatch in upstream fine-tuning script.
+- Current best checkpoint for product goals: `runs/sft_1_7b_smoke1/checkpoint-epoch-0`.
+- Training policy: early stopping after first epoch unless listening tests clearly improve naturalness.
 
 ---
 
@@ -39,13 +42,24 @@ Reference docs:
 - Dataset contract documented (`docs/DATASET_CONTRACT.md`).
 - Experiment scaffold created (`experiments/qwen3_ru_en_speaker_v1`).
 - Helper scripts added for validate/prepare/train/infer (`scripts/`).
+- `sox` installed and verified on host.
+- Smoke preprocessing completed (`train_with_codes_24k.jsonl`).
+- Smoke SFT completed on 1.7B (`runs/sft_1_7b_smoke1/checkpoint-epoch-0`).
+- Longer run completed on 1.7B (`runs/sft_1_7b_run2_e3`, epochs 0..2 checkpoints saved).
+- Listening feedback captured: later checkpoint (`run2 epoch-2`) improved EN accent but regressed naturalness (faster pace, abrupt start/end).
+- Comparison sample packs generated for `run2 epoch-0` and `run2 epoch-1`.
+- Final listening verdict: `mini_pack_en` is best for product goals (most natural rhythm/starts/ends; good speaker similarity), while run2 packs show stronger accent trade-offs but worse artifacts.
+- Eval cycle run3 completed: `runs/sft_1_7b_run3_e1_eval/checkpoint-epoch-0`.
+- Eval phrase-set samples generated: `samples/mini_pack_en_run3_epoch0_eval`.
+- Run3 listening verdict: very close to baseline, but slightly worse start quality (minor extra noise).
+- Checkpoint decision: keep frozen baseline `runs/sft_1_7b_smoke1/checkpoint-epoch-0`; do not promote run3.
 
 ### In progress
-- Resolving system/runtime blockers (`sox`, optional `flash-attn`).
+- Optional performance optimization (`flash-attn`) remains unresolved.
+- Separate debug track for 0.6B shape mismatch.
 
 ### Pending
-- First preprocessing + first SFT run.
-- First quality/control evaluation report.
+- No blocking pending items for current stage; production candidate is frozen.
 
 ---
 
@@ -67,20 +81,18 @@ Reference docs:
 
 ## Known blockers
 
-1. `sox` binary is missing on host (detected during `qwen_tts` import).
-2. Optional `flash-attn` installation failed due CUDA mismatch (`13.0` detected vs torch CUDA `12.8`).
+1. Optional `flash-attn` installation failed due CUDA mismatch (`13.0` detected vs torch CUDA `12.8`).
+2. `0.6B` fine-tune path currently fails with embedding shape mismatch in upstream script.
 
 ---
 
 ## Next update trigger
 
 Update this file immediately after:
-- first successful `prepare_data.py` run,
-- first successful `sft_12hz.py` run.
+- next dataset-quality iteration is prepared and evaluated with the same phrase set.
 
 ## Immediate next action
 
-1. Install system `sox` package on host.
-2. Copy `experiments/qwen3_ru_en_speaker_v1/manifests/train_raw.template.jsonl` to `train_raw.jsonl` and fill real paths.
-3. Run `python scripts/validate_manifest.py --input_jsonl .../train_raw.jsonl`.
-4. Run `bash scripts/run_prepare_data.sh`.
+1. Keep current production candidate as baseline checkpoint.
+2. Pause model-training iterations for this dataset snapshot.
+3. Prepare dataset-quality improvements before the next training cycle.

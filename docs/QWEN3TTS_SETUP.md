@@ -101,6 +101,9 @@ python -c "from qwen_tts import Qwen3TTSModel; print('qwen_tts_ok')"
 Baseline model for first run:
 - `Qwen/Qwen3-TTS-12Hz-0.6B-Base`
 
+Current working smoke-train track:
+- `Qwen/Qwen3-TTS-12Hz-1.7B-Base` (0.6B path currently has shape mismatch in upstream script)
+
 Tokenizer for preprocessing:
 - `Qwen/Qwen3-TTS-Tokenizer-12Hz`
 
@@ -167,10 +170,11 @@ Completed on `/ai/Qwen3TTS`:
 - `requirements.txt` installed successfully.
 - `external/Qwen3-TTS` cloned successfully.
 - Runtime import checks passed (`qwen_tts_ok`, CUDA visible).
+- `sox` installed and verified (`sox --version`).
 - Baseline model and tokenizer downloaded from Hugging Face:
   - `Qwen/Qwen3-TTS-12Hz-0.6B-Base`
   - `Qwen/Qwen3-TTS-Tokenizer-12Hz`
 
 Open blockers:
-1. `sox` command is missing on host (warning appears during qwen_tts imports).
-2. `flash-attn` build failed due CUDA mismatch (`13.0` vs `12.8`).
+1. `flash-attn` build failed due CUDA mismatch (`13.0` vs `12.8`).
+2. `0.6B` fine-tune path currently fails with embedding shape mismatch in upstream script.

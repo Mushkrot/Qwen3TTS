@@ -14,6 +14,7 @@ Synchronization and dubbing pipeline orchestration are intentionally out of scop
 - Setup and installation: `docs/QWEN3TTS_SETUP.md`
 - Live project state: `docs/PROJECT_STATUS.md`
 - Dataset contract: `docs/DATASET_CONTRACT.md`
+- Evaluation protocol: `docs/EVAL_PHRASE_SET.md`
 - Deep research context: `docs/VOICE_CLONING_DEEP_RESEARCH_SINCE_2025-09.md`
 - Historical audit context: `docs/VOICE_CLONING_PROJECTS_AUDIT_2026-02-21.md`
 

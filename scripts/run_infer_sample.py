@@ -18,6 +18,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--text", default="She said she would be here by noon.", help="English test text")
     parser.add_argument("--output_wav", required=True, help="Output wav path")
     parser.add_argument("--device", default="cuda:0", help="Torch device")
+    parser.add_argument(
+        "--attn_implementation",
+        default="sdpa",
+        help="Attention backend (e.g. sdpa, flash_attention_2)",
+    )
     return parser.parse_args()
 
 
@@ -30,7 +35,7 @@ def main() -> int:
         args.checkpoint,
         device_map=args.device,
         dtype=torch.bfloat16,
-        attn_implementation="flash_attention_2",
+        attn_implementation=args.attn_implementation,
     )
 
     wavs, sr = tts.generate_custom_voice(text=args.text, speaker=args.speaker)
