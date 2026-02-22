@@ -9,6 +9,7 @@ Primary mission for current stage:
 Reference docs:
 - `docs/QWEN3TTS_IMPLEMENTATION_PLAN.md`
 - `docs/QWEN3TTS_SETUP.md`
+- `docs/DATASET_CONTRACT.md`
 - `docs/VOICE_CLONING_DEEP_RESEARCH_SINCE_2025-09.md`
 - `docs/VOICE_CLONING_PROJECTS_AUDIT_2026-02-21.md`
 
@@ -35,12 +36,14 @@ Reference docs:
 - Runtime checks passed (`torch`, CUDA visibility, `qwen_tts` import).
 - Baseline model and tokenizer pre-downloaded from Hugging Face.
 - Lock snapshot generated: `requirements.lock.txt`.
+- Dataset contract documented (`docs/DATASET_CONTRACT.md`).
+- Experiment scaffold created (`experiments/qwen3_ru_en_speaker_v1`).
+- Helper scripts added for validate/prepare/train/infer (`scripts/`).
 
 ### In progress
 - Resolving system/runtime blockers (`sox`, optional `flash-attn`).
 
 ### Pending
-- Dataset contract finalization and manifest templates.
 - First preprocessing + first SFT run.
 - First quality/control evaluation report.
 
@@ -52,6 +55,7 @@ Reference docs:
 2. Execute `docs/QWEN3TTS_SETUP.md` step-by-step.
 3. Confirm runtime checks pass.
 4. Continue with dataset handoff checklist and preprocessing stage.
+5. Use `scripts/README.md` for command-level run helpers.
 
 ---
 
@@ -77,5 +81,6 @@ Update this file immediately after:
 ## Immediate next action
 
 1. Install system `sox` package on host.
-2. Re-run `prepare_data.py --help` sanity check.
-3. Freeze dataset contract and create `train_raw.jsonl` template.
+2. Copy `experiments/qwen3_ru_en_speaker_v1/manifests/train_raw.template.jsonl` to `train_raw.jsonl` and fill real paths.
+3. Run `python scripts/validate_manifest.py --input_jsonl .../train_raw.jsonl`.
+4. Run `bash scripts/run_prepare_data.sh`.

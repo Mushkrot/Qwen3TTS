@@ -149,7 +149,9 @@ Track per run:
 
 ## 8) Immediate next step
 
-Proceed with **Phase A (Environment bootstrap)** and document exact install commands and validation checks in a dedicated setup guide (`docs/QWEN3TTS_SETUP.md`).
+Proceed with dataset handoff and execute **Phase C (Preprocessing and code extraction)** using:
+- `docs/DATASET_CONTRACT.md`
+- `scripts/README.md`
 
 ---
 
@@ -160,5 +162,9 @@ Phase A progress:
 - Completed: baseline model/tokenizer downloaded for 0.6B track.
 - Open blockers: missing system `sox`; optional `flash-attn` build failure due CUDA toolchain mismatch.
 
+Phase B progress:
+- Completed: dataset contract and manifest template.
+- Completed: helper scripts for validate/prepare/train/infer.
+
 Current active target:
-- Move to Phase B (dataset contract and manifest templates) immediately after resolving or explicitly accepting the `sox` constraint.
+- Run first real `train_raw.jsonl` validation and `prepare_data.py` execution.

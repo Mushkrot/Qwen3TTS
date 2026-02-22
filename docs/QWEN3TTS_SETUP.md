@@ -143,6 +143,12 @@ Once dataset is ready, workflow will be:
 See implementation plan:
 - `docs/QWEN3TTS_IMPLEMENTATION_PLAN.md`
 
+See dataset requirements:
+- `docs/DATASET_CONTRACT.md`
+
+Use script wrappers:
+- `scripts/README.md`
+
 ---
 
 ## 9) Notes for independent developers
