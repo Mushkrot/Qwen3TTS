@@ -150,3 +150,15 @@ Track per run:
 ## 8) Immediate next step
 
 Proceed with **Phase A (Environment bootstrap)** and document exact install commands and validation checks in a dedicated setup guide (`docs/QWEN3TTS_SETUP.md`).
+
+---
+
+## 9) Execution status snapshot
+
+Phase A progress:
+- Completed: venv setup, dependency installation, upstream finetuning repo clone, CUDA/runtime checks.
+- Completed: baseline model/tokenizer downloaded for 0.6B track.
+- Open blockers: missing system `sox`; optional `flash-attn` build failure due CUDA toolchain mismatch.
+
+Current active target:
+- Move to Phase B (dataset contract and manifest templates) immediately after resolving or explicitly accepting the `sox` constraint.
