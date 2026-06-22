@@ -2,9 +2,9 @@
 
 ## Current Session
 
-Status: Remediation complete: runtime .venv restored, input audio ignored, docs updated, code smoke/hardening fixes verified, ready to stage and commit code/docs/config/patches only
-Current focus: Qwen3TTS restored-state freeze and commit preparation
-Next step: Stage code/docs/.codex config/patches/lock/scaffolds; ensure raw Input audio remains ignored; commit current safe project state before new measurement work
+Status: Implemented and committed 56dc731. Default voice_filter_mode silero now loads local Silero VAD from /ai/models/torch_cache/hub/snakers4_silero-vad_master using project ffmpeg PCM decoding; ffmpeg silencedetect fallback is conservative; smoke uses .venv/bin/python and explicitly asserts speech accepted, music rejected, silence rejected, mixed rejected. Tracked tree is clean except ignored local artifacts/raw Baritone Input audio.
+Current focus: Qwen3TTS dataset voice-filtering audit and external ASR inventory after recovery
+Next step: If continuing dataset work, build a real Ready dataset with --voice_filter_mode silero --strict_mode and inspect quality_report plus filtered_out quarantine before training.
 
 ## Active Constraints
 
@@ -14,9 +14,7 @@ Next step: Stage code/docs/.codex config/patches/lock/scaffolds; ensure raw Inpu
 
 ## Open Questions
 
-- Should historical checkpoint/sample artifacts be restored from backup or regenerated from the current Baritone dataset?
-- Should full ASR smoke get a tiny tracked synthetic/known-good speech fixture, or stay fixture-explicit?
-- Should .git tmp_pack garbage be cleaned in a separate maintenance step after explicit owner approval?
+- Whether to install WhisperX into the Qwen3TTS .venv for better word boundary alignment before production dataset builds.
 
 ## Recallant
 
