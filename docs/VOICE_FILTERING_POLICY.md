@@ -3,47 +3,84 @@
 ## Goal
 
 Keep dataset chunks restricted to human speech only.
-For the next training cycle we treat anything outside clear voice speech as non-voice and block it from `train_raw.jsonl`.
+For each run, non-voice portions must not enter `train_raw.jsonl`.
 
 ## Non-voice taxonomy
 
-- Intro/outro music (instrumental loops, songs, jingles)
+- Intro/outro music, jingles, instrumental stings
 - Background music over speech
-- Tone/sound effects (beeps, buzzers, ringing, environmental sounds)
+- Tone/sound effects (beeps, buzzers, alerts)
 - Long room tone / HVAC / crowd noise with no speech
-- Low-quality corrupted spans with unstable ASR timestamps
+- Corrupt/garbled regions that fail detector or ASR alignment
 
-## What is kept as voice
+## Kept audio policy
 
-- Chunks with at least one readable linguistic token (`--min_words`, `--min_chars`)
-- Chunks inside model speech segments that pass `no_speech_prob` gating
-- Chunks whose confidence and low-confidence ratio are acceptable
-- Chunks passing required duration constraints (`--min_duration`, `--target_duration`, `--max_duration`)
+- Chunks with readable ASR output (`--min_chars`, `--min_words`)
+- Chunks with speech coverage above `--voice_filter_min_coverage`
+- Chunks inside detected voice regions and validated by quality gates
 
-## Non-voice filter modes
+## Filter mode
 
-- `off`
-  - No filtering beyond existing ASR segmentation and confidence rules.
-  - Use only to reproduce historic behavior.
-- `hybrid` (default)
-  - Removes ASR segments with high `no_speech_prob` (`--max_no_speech_prob`).
-  - Calculates voice-overlap per chunk and reports `voice_overlap_ratio`.
-- `strict`
-  - `hybrid` rules plus per-word voice overlap check (`--min_word_voice_overlap`) before final segment assembly.
+Modes supported by `scripts/build_dataset_from_audio.py`:
 
-## Defaults
+- `off`: legacy behavior (no pre-ASR filtering)
+- `silero` (default): pre-ASR region detector via reusable backend
+- `vad`: alias for `silero`
+- `whisper` / `whisper_only`: fallback voice-region path
+- `hybrid`, `strict`, `legacy`: compatibility aliases
 
-- `--voice_filter_mode hybrid`
-- `--max_no_speech_prob 0.80`
-- `--min_segment_voice_ratio 0.75`
-- `--min_word_voice_overlap 0.65`
+## Flags
 
-## Evidence model in reports
+- `--voice_filter_mode`
+- `--voice_filter_min_speech_ms`
+- `--voice_filter_min_silence_ms`
+- `--voice_filter_merge_gap_ms`
+- `--voice_filter_min_coverage`
+- `--voice_filter_export_quarantine`
+- `--voice_filter_export_quarantine_snippets`
 
-- `reasons == insufficient_voice_coverage` means the chunk was rejected due to low overlap with speech spans.
-- `voice_overlap_ratio` is added in both accepted and rejected rows.
+## Report and metadata contract
 
-## Fallback behavior
+Purity fields added to each quality report row:
 
-- If ASR output does not contain `segment.no_speech_prob`, legacy behavior is used for that field (the segment is kept).
-- `train_raw.jsonl` schema does **not** change.
+- `speech_ratio`
+- `non_voice_ratio`
+- `voice_regions_used_ms`
+- `source_duration_ms`
+- `filter_mode`
+- `filter_version`
+
+Stable parseable rejection reasons:
+
+- `no_voice_regions_detected`
+- `non_voice_ratio_too_high`
+- `too_few_voice_frames`
+- `region_too_short`
+- `text_too_short`
+- `too_few_words`
+- `duration_too_short`
+- `duration_too_long`
+- `avg_confidence_too_low`
+- `too_many_low_confidence_words`
+
+## Quarantine
+
+When enabled, filtered-out spans are written to:
+
+- `output_root/filtered_out/removed_segments.jsonl`
+- `output_root/filtered_out/run_metadata.json`
+
+`removed_segments.jsonl` always contains row keys:
+
+- `source_audio`
+- `start`
+- `end`
+- `duration`
+- `reason`
+
+Optional snippets are stored under `filtered_out/snippets/` when `--voice_filter_export_quarantine_snippets` is set.
+
+## Compatibility
+
+`build_dataset_from_audio.py` keeps `--min_segment_voice_ratio` as a deprecated alias for
+`--voice_filter_min_coverage`.

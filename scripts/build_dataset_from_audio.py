@@ -3,11 +3,11 @@
 
 Pipeline:
 1) normalize source audio to 16k mono for ASR,
-2) normalize source audio to 24k mono for final training chunks,
-3) run word-level ASR,
-4) split by pauses + duration constraints,
-5) extract chunk WAVs,
-6) write train_raw.jsonl manifest.
+2) detect/pre-filter voice regions,
+3) normalize source audio to 24k mono for final training chunks,
+4) run word-level ASR,
+5) split by pauses + duration constraints,
+6) write train_raw.jsonl manifest and detailed reports.
 """
 
 from __future__ import annotations
@@ -22,10 +22,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from voice_filter import VoiceRegion, detect_voice_regions, filter_regions_by_duration
+
 
 SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", ".opus", ".wma", ".aiff"}
 PUNCT_NO_SPACE_BEFORE = {".", ",", "!", "?", ":", ";", ")", "]", "}"}
 PUNCT_NO_SPACE_AFTER = {"(", "[", "{"}
+VOICE_FILTER_VERSION = "2.0.0"
 
 
 @dataclass
@@ -34,19 +37,6 @@ class WordItem:
     start: float
     end: float
     confidence: float
-
-
-@dataclass
-class SegmentItem:
-    start: float
-    end: float
-    text: str
-
-
-@dataclass
-class SpeechSegment:
-    start: float
-    end: float
 
 
 @dataclass
@@ -68,6 +58,15 @@ class SegmentQuality:
     @property
     def is_valid(self) -> bool:
         return not self.reasons
+
+
+@dataclass
+class SpeechRow:
+    source_audio: str
+    start_sec: float
+    end_sec: float
+    duration_sec: float
+    reasons: list[str]
 
 
 def parse_args() -> argparse.Namespace:
@@ -105,37 +104,78 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--low_confidence_threshold", type=float, default=0.5)
     parser.add_argument("--min_avg_confidence", type=float, default=0.45)
     parser.add_argument("--max_low_conf_ratio", type=float, default=0.35)
+
     parser.add_argument(
         "--voice_filter_mode",
-        choices=["off", "hybrid", "strict"],
-        default="hybrid",
+        choices=["off", "whisper", "whisper_only", "vad", "silero", "hybrid", "strict", "legacy"],
+        default="silero",
         help=(
-            "off: disable additional non-voice filtering (legacy behavior); "
-            "hybrid: reject whisper segments with high no_speech_prob; "
-            "strict: additionally require high speech overlap for each segment"
+            "off: disable pre-ASR filtering; "
+            "silero/vad: run voice-region detector; "
+            "whisper/whisper_only: use whisper-style fallback; "
+            "hybrid/strict: legacy aliases -> silero"
         ),
     )
+    parser.add_argument(
+        "--voice_filter_min_speech_ms",
+        type=int,
+        default=300,
+        help="Minimum detected speech segment length in milliseconds (primary)",
+    )
+    parser.add_argument(
+        "--voice_filter_min_silence_ms",
+        type=int,
+        default=250,
+        help="Minimum silence gap before segment split in milliseconds (primary)",
+    )
+    parser.add_argument(
+        "--voice_filter_merge_gap_ms",
+        type=int,
+        default=150,
+        help="Gap under which neighboring speech regions are merged, in milliseconds.",
+    )
+    parser.add_argument(
+        "--voice_filter_min_coverage",
+        type=float,
+        default=0.75,
+        help="Minimum required speech coverage ratio per final chunk.",
+    )
+    parser.add_argument(
+        "--voice_filter_export_quarantine",
+        action="store_true",
+        help="Write removed non-voice regions into output_root/filtered_out/.",
+    )
+    parser.add_argument(
+        "--voice_filter_export_quarantine_snippets",
+        action="store_true",
+        help="Additionally write snippet wav files under output_root/filtered_out/snippets.",
+    )
+
+    # Backward-compatible legacy knobs kept as aliases for existing scripts.
     parser.add_argument(
         "--max_no_speech_prob",
         type=float,
         default=0.80,
-        help="Maximum segment no_speech_prob for hybrid/strict filtering.",
+        help="Deprecated alias; retained for script compatibility.",
     )
     parser.add_argument(
         "--min_word_voice_overlap",
         type=float,
         default=0.65,
-        help=(
-            "In strict mode, minimum overlap ratio for every word span with accepted speech spans. "
-            "Words below this overlap are treated as non-voice."
-        ),
+        help="Deprecated alias; retained for script compatibility.",
     )
     parser.add_argument(
         "--min_segment_voice_ratio",
         type=float,
-        default=0.75,
-        help="Minimum voice-overlap ratio required for a chunk to be accepted (hybrid/strict).",
+        default=None,
+        help="Deprecated alias for --voice_filter_min_coverage.",
     )
+    parser.add_argument(
+        "--legacy_mode",
+        action="store_true",
+        help="Compatibility alias: equivalent to --voice_filter_mode off.",
+    )
+
     parser.add_argument(
         "--report_name",
         default="quality_report",
@@ -159,13 +199,33 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_ffmpeg(command: list[str]) -> None:
-    subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def parse_filter_mode(mode: str, legacy_mode: bool) -> str:
+    normalized = mode.lower()
+    if legacy_mode:
+        return "off"
+
+    if normalized == "legacy":
+        return "off"
+    if normalized in {"hybrid", "strict"}:
+        return "silero"
+    if normalized == "whisper_only":
+        return "whisper"
+    return normalized
+
+
+def run_ffmpeg(command: list[str], *, check_result: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        command,
+        check=check_result,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
 
 
 def convert_audio(input_path: Path, output_path: Path, sample_rate: int) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    command = [
+    cmd = [
         "ffmpeg",
         "-y",
         "-i",
@@ -178,12 +238,12 @@ def convert_audio(input_path: Path, output_path: Path, sample_rate: int) -> None
         "pcm_s16le",
         str(output_path),
     ]
-    run_ffmpeg(command)
+    run_ffmpeg(cmd)
 
 
-def extract_chunk(master_audio_24k: Path, start_sec: float, end_sec: float, out_wav: Path) -> None:
+def extract_segment(input_audio: Path, start_sec: float, end_sec: float, out_wav: Path, sample_rate: int) -> None:
     out_wav.parent.mkdir(parents=True, exist_ok=True)
-    command = [
+    cmd = [
         "ffmpeg",
         "-y",
         "-ss",
@@ -191,27 +251,45 @@ def extract_chunk(master_audio_24k: Path, start_sec: float, end_sec: float, out_
         "-to",
         f"{end_sec:.3f}",
         "-i",
-        str(master_audio_24k),
+        str(input_audio),
         "-ac",
         "1",
         "-ar",
-        "24000",
+        str(sample_rate),
         "-c:a",
         "pcm_s16le",
         str(out_wav),
     ]
-    run_ffmpeg(command)
+    run_ffmpeg(cmd)
+
+
+def audio_duration_seconds(audio_path: Path) -> float:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "json",
+        str(audio_path),
+    ]
+    proc = run_ffmpeg(cmd)
+    try:
+        payload = json.loads(proc.stdout)
+        raw = payload.get("format", {}).get("duration", "0")
+        return max(0.0, float(raw))
+    except Exception:
+        return 0.0
 
 
 def list_audio_files(input_dir: Path) -> list[Path]:
-    files = [p for p in sorted(input_dir.iterdir()) if p.is_file() and p.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS]
-    return files
+    return [p for p in sorted(input_dir.iterdir()) if p.is_file() and p.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS]
 
 
 def clean_token(token: str) -> str:
     token = token.strip()
-    token = re.sub(r"\s+", " ", token)
-    return token
+    return re.sub(r"\s+", " ", token)
 
 
 def join_tokens(tokens: Iterable[str]) -> str:
@@ -220,6 +298,7 @@ def join_tokens(tokens: Iterable[str]) -> str:
         token = clean_token(token)
         if not token:
             continue
+
         if not out:
             out.append(token)
             continue
@@ -229,60 +308,49 @@ def join_tokens(tokens: Iterable[str]) -> str:
             out[-1] = prev + token
         else:
             out.append(token)
+
     return " ".join(out).strip()
 
 
-def _coerce_prob(value: object) -> float:
-    try:
-        probability = float(value)
-    except (TypeError, ValueError):
-        return 1.0
-    return max(0.0, min(1.0, probability))
+def segment_overlap_ratio(start_sec: float, end_sec: float, speech_regions: list[VoiceRegion]) -> float:
+    if not speech_regions:
+        return 0.0
 
-
-def extract_speech_segments(
-    segments: Iterable,
-    max_no_speech_prob: float,
-    mode: str,
-) -> list[SpeechSegment]:
-    speech: list[SpeechSegment] = []
-
-    if mode == "off":
-        return speech
-
-    for segment in segments:
-        if segment.start is None or segment.end is None:
-            continue
-        start = float(segment.start)
-        end = float(segment.end)
-        if end <= start:
-            continue
-
-        no_speech_prob = _coerce_prob(getattr(segment, "no_speech_prob", 1.0))
-        if no_speech_prob > max_no_speech_prob:
-            continue
-
-        speech.append(SpeechSegment(start=start, end=end))
-
-    return speech
-
-
-def speech_overlap_ratio(start: float, end: float, speech_segments: list[SpeechSegment]) -> float:
-    if not speech_segments:
-        return 1.0
-
-    duration = max(0.0, end - start)
+    duration = max(0.0, end_sec - start_sec)
     if duration <= 0.0:
         return 0.0
 
     overlap = 0.0
-    for seg in speech_segments:
-        overlap_start = max(start, seg.start)
-        overlap_end = min(end, seg.end)
+    for region in speech_regions:
+        overlap_start = max(start_sec, region.start_sec)
+        overlap_end = min(end_sec, region.end_sec)
         if overlap_end > overlap_start:
             overlap += overlap_end - overlap_start
 
     return min(1.0, overlap / duration)
+
+
+def complement_regions(total_sec: float, voice_regions: list[VoiceRegion]) -> list[VoiceRegion]:
+    if total_sec <= 0.0:
+        return []
+
+    if not voice_regions:
+        return [VoiceRegion(0.0, total_sec)]
+
+    ordered = sorted(voice_regions, key=lambda r: r.start_sec)
+    non_voice: list[VoiceRegion] = []
+    cursor = 0.0
+    for region in ordered:
+        if region.start_sec > cursor:
+            non_voice.append(VoiceRegion(cursor, min(region.start_sec, total_sec)))
+        cursor = max(cursor, region.end_sec)
+        if cursor >= total_sec:
+            break
+
+    if cursor < total_sec:
+        non_voice.append(VoiceRegion(cursor, total_sec))
+
+    return [r for r in non_voice if r.end_sec > r.start_sec]
 
 
 def transcribe_words(
@@ -292,13 +360,11 @@ def transcribe_words(
     beam_size: int,
     best_of: int,
     temperature: float,
-    voice_filter_mode: str,
-    max_no_speech_prob: float,
-    min_word_voice_overlap: float,
     use_whisperx_align: bool,
     device: str,
     whisperx_interpolate_method: str,
-) -> tuple[list[WordItem], list[SpeechSegment]]:
+    segment_offset_sec: float,
+) -> list[WordItem]:
     segments, info = model.transcribe(
         str(audio_path_16k),
         language=language,
@@ -310,33 +376,32 @@ def transcribe_words(
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 400, "speech_pad_ms": 300},
     )
+
     segments = list(segments)
-    speech_segments = extract_speech_segments(segments, max_no_speech_prob=max_no_speech_prob, mode=voice_filter_mode)
-
     words: list[WordItem] = []
-    for segment in segments:
-        if voice_filter_mode != "off":
-            no_speech_prob = _coerce_prob(getattr(segment, "no_speech_prob", 1.0))
-            if no_speech_prob > max_no_speech_prob:
-                continue
 
+    for segment in segments:
         if not getattr(segment, "words", None):
             continue
+
         for w in segment.words:
             if w.start is None or w.end is None:
                 continue
             token = clean_token(w.word)
             if not token:
                 continue
-            if voice_filter_mode == "strict":
-                overlap = speech_overlap_ratio(float(w.start), float(w.end), speech_segments)
-                if overlap < min_word_voice_overlap:
-                    continue
-            confidence = float(getattr(w, "probability", 1.0) or 1.0)
-            words.append(WordItem(token=token, start=float(w.start), end=float(w.end), confidence=confidence))
 
-    if not use_whisperx_align:
-        return words, speech_segments
+            words.append(
+                WordItem(
+                    token=token,
+                    start=float(w.start) + segment_offset_sec,
+                    end=float(w.end) + segment_offset_sec,
+                    confidence=float(getattr(w, "probability", 1.0) or 1.0),
+                )
+            )
+
+    if not use_whisperx_align or not words:
+        return words
 
     try:
         import whisperx
@@ -381,6 +446,7 @@ def transcribe_words(
         aligned_words: list[WordItem] = []
         base_confidences = [w.confidence for w in words]
         conf_idx = 0
+
         for seg in aligned.get("segments", []):
             for w in seg.get("words", []):
                 token = clean_token(str(w.get("word", "")))
@@ -392,12 +458,17 @@ def transcribe_words(
                 confidence = base_confidences[conf_idx] if conf_idx < len(base_confidences) else 1.0
                 conf_idx += 1
                 aligned_words.append(
-                    WordItem(token=token, start=float(start), end=float(end), confidence=float(confidence))
+                    WordItem(
+                        token=token,
+                        start=float(start) + segment_offset_sec,
+                        end=float(end) + segment_offset_sec,
+                        confidence=float(confidence),
+                    )
                 )
 
         if aligned_words:
             print(f"WhisperX alignment applied for {audio_path_16k.name}: {len(aligned_words)} words")
-            return aligned_words, speech_segments
+            return aligned_words
 
         raise RuntimeError(
             f"WhisperX returned no aligned words for {audio_path_16k.name}. "
@@ -441,19 +512,20 @@ def split_into_segments(words: list[WordItem], cfg: SegmentConfig) -> list[tuple
 def evaluate_segment_quality(
     seg_words: list[WordItem],
     text: str,
-    duration: float,
-    voice_overlap_ratio: float,
+    source_duration: float,
+    speech_ratio: float,
     args: argparse.Namespace,
 ) -> SegmentQuality:
     word_count = len(seg_words)
     avg_confidence = sum(w.confidence for w in seg_words) / max(1, word_count)
     low_conf_count = sum(1 for w in seg_words if w.confidence < args.low_confidence_threshold)
     low_conf_ratio = low_conf_count / max(1, word_count)
+    min_coverage = args.voice_filter_min_coverage
 
     reasons: list[str] = []
-    if duration < args.min_duration:
+    if source_duration < args.min_duration:
         reasons.append("duration_too_short")
-    if duration > args.max_duration:
+    if source_duration > args.max_duration:
         reasons.append("duration_too_long")
     if len(text) < args.min_chars:
         reasons.append("text_too_short")
@@ -463,8 +535,10 @@ def evaluate_segment_quality(
         reasons.append("avg_confidence_too_low")
     if low_conf_ratio > args.max_low_conf_ratio:
         reasons.append("too_many_low_confidence_words")
-    if args.voice_filter_mode != "off" and voice_overlap_ratio < args.min_segment_voice_ratio:
-        reasons.append("insufficient_voice_coverage")
+    if args.voice_filter_mode != "off" and speech_ratio < min_coverage:
+        reasons.append("non_voice_ratio_too_high")
+    if args.voice_filter_mode != "off" and source_duration * 1000 < args.voice_filter_min_speech_ms:
+        reasons.append("too_few_voice_frames")
 
     return SegmentQuality(
         word_count=word_count,
@@ -472,6 +546,42 @@ def evaluate_segment_quality(
         low_conf_ratio=low_conf_ratio,
         reasons=reasons,
     )
+
+
+def build_report_row(
+    status: str,
+    source_audio: str,
+    chunk_path: Path | None,
+    start_sec: float,
+    end_sec: float,
+    text: str,
+    reasons: list[str],
+    seg_words: list[WordItem],
+    source_duration_ms: float,
+    voice_overlap_ms: float,
+    voice_ratio: float,
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    non_voice_ratio = max(0.0, 1.0 - voice_ratio)
+    return {
+        "status": status,
+        "source_audio": source_audio,
+        "chunk_audio": str(chunk_path.resolve()) if chunk_path else "",
+        "start": round(start_sec, 3),
+        "end": round(end_sec, 3),
+        "duration": round(end_sec - start_sec, 3),
+        "word_count": len(seg_words),
+        "avg_confidence": round(sum(w.confidence for w in seg_words) / max(1, len(seg_words)), 4),
+        "low_conf_ratio": round(sum(1 for w in seg_words if w.confidence < args.low_confidence_threshold) / max(1, len(seg_words)), 4),
+        "voice_regions_used_ms": round(voice_overlap_ms, 3),
+        "source_duration_ms": round(source_duration_ms, 3),
+        "speech_ratio": round(min(1.0, max(0.0, voice_ratio)), 4),
+        "non_voice_ratio": round(max(0.0, min(1.0, non_voice_ratio)), 4),
+        "filter_mode": args.voice_filter_mode,
+        "filter_version": VOICE_FILTER_VERSION,
+        "reasons": reasons,
+        "text": text,
+    }
 
 
 def write_quality_reports(output_root: Path, report_name: str, report_rows: list[dict[str, object]]) -> tuple[Path, Path]:
@@ -494,7 +604,12 @@ def write_quality_reports(output_root: Path, report_name: str, report_rows: list
         "word_count",
         "avg_confidence",
         "low_conf_ratio",
-        "voice_overlap_ratio",
+        "voice_regions_used_ms",
+        "source_duration_ms",
+        "speech_ratio",
+        "non_voice_ratio",
+        "filter_mode",
+        "filter_version",
         "reasons",
         "text",
     ]
@@ -528,8 +643,52 @@ def ensure_ref_audio(ref_audio_arg: str, output_root: Path, first_chunk: Path | 
     return first_chunk.resolve()
 
 
+def write_removed_segments(removed_segments: list[SpeechRow], filtered_out_dir: Path) -> Path | None:
+    if not removed_segments:
+        return None
+
+    filtered_out_dir.mkdir(parents=True, exist_ok=True)
+    removed_path = filtered_out_dir / "removed_segments.jsonl"
+
+    with removed_path.open("w", encoding="utf-8") as f:
+        for row in removed_segments:
+            payload = {
+                "source_audio": row.source_audio,
+                "start": round(row.start_sec, 3),
+                "end": round(row.end_sec, 3),
+                "duration": round(row.duration_sec, 3),
+                "reason": ";".join(row.reasons),
+            }
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+    return removed_path
+
+
+def write_run_metadata(output_root: Path, args: argparse.Namespace, summary: dict[str, object]) -> Path:
+    metadata_path = output_root / "filtered_out" / "run_metadata.json"
+    metadata = {
+        "schema": "qwen3tts-voice-filtering-v1",
+        "filter_version": VOICE_FILTER_VERSION,
+        "voice_filter_mode": args.voice_filter_mode,
+        "voice_filter_min_speech_ms": args.voice_filter_min_speech_ms,
+        "voice_filter_min_silence_ms": args.voice_filter_min_silence_ms,
+        "voice_filter_merge_gap_ms": args.voice_filter_merge_gap_ms,
+        "voice_filter_min_coverage": args.voice_filter_min_coverage,
+        "input_dir": str(Path(args.input_dir).expanduser().resolve()),
+        "output_root": str(output_root),
+        "summary": summary,
+    }
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    return metadata_path
+
+
 def main() -> int:
     args = parse_args()
+
+    args.voice_filter_mode = parse_filter_mode(args.voice_filter_mode, args.legacy_mode)
+    if args.min_segment_voice_ratio is not None:
+        args.voice_filter_min_coverage = args.min_segment_voice_ratio
 
     try:
         from faster_whisper import WhisperModel
@@ -557,11 +716,25 @@ def main() -> int:
     chunks_dir = output_root / "chunks"
     transcripts_dir = output_root / "transcripts"
     manifests_dir = output_root / "manifests"
+    filtered_out_dir = output_root / "filtered_out"
+    temp_regions_dir = output_root / "tmp_regions"
 
-    for d in (converted_16k_dir, converted_24k_dir, chunks_dir, transcripts_dir, manifests_dir):
+    for d in (converted_16k_dir, converted_24k_dir, chunks_dir, transcripts_dir, manifests_dir, temp_regions_dir):
         d.mkdir(parents=True, exist_ok=True)
 
     print(f"Found input files: {len(audio_files)}")
+    print(
+        "Voice filter: mode=%s, min_speech_ms=%d, min_silence_ms=%d, merge_gap_ms=%d, min_coverage=%.2f, export_quarantine=%s" %
+        (
+            args.voice_filter_mode,
+            args.voice_filter_min_speech_ms,
+            args.voice_filter_min_silence_ms,
+            args.voice_filter_merge_gap_ms,
+            args.voice_filter_min_coverage,
+            args.voice_filter_export_quarantine,
+        )
+    )
+
     print("Loading ASR model...")
     model = WhisperModel(args.asr_model, device=args.device, compute_type=args.compute_type)
 
@@ -575,10 +748,17 @@ def main() -> int:
 
     rows: list[dict[str, str]] = []
     report_rows: list[dict[str, object]] = []
+    removed_rows: list[SpeechRow] = []
     global_idx = 0
     first_chunk: Path | None = None
+    total_processed_files = 0
+    accepted_seconds = 0.0
+    rejected_seconds = 0.0
+    filtered_seconds = 0.0
+    source_seconds_total = 0.0
 
     for file_idx, src_audio in enumerate(audio_files, start=1):
+        total_processed_files += 1
         print(f"[{file_idx}/{len(audio_files)}] Processing: {src_audio.name}")
 
         base = src_audio.stem
@@ -587,54 +767,186 @@ def main() -> int:
 
         convert_audio(src_audio, wav16, sample_rate=16000)
         convert_audio(src_audio, wav24, sample_rate=24000)
+        source_duration = audio_duration_seconds(wav16)
+        source_seconds_total += source_duration
 
-        words, speech_segments = transcribe_words(
-            model=model,
-            audio_path_16k=wav16,
-            language=args.language,
-            beam_size=args.beam_size,
-            best_of=args.best_of,
-            temperature=args.temperature,
-            voice_filter_mode=args.voice_filter_mode,
-            max_no_speech_prob=args.max_no_speech_prob,
-            min_word_voice_overlap=args.min_word_voice_overlap,
-            use_whisperx_align=args.use_whisperx_align,
-            device=args.device,
-            whisperx_interpolate_method=args.whisperx_interpolate_method,
-        )
+        try:
+            voice_regions = detect_voice_regions(
+                wav16,
+                backend=args.voice_filter_mode,
+                sample_rate=16000,
+                min_speech_ms=args.voice_filter_min_speech_ms,
+                min_silence_ms=args.voice_filter_min_silence_ms,
+                merge_gap_ms=args.voice_filter_merge_gap_ms,
+            )
+            # Keep explicit minimum duration behavior deterministic per contract.
+            voice_regions = filter_regions_by_duration(
+                voice_regions,
+                min_duration_ms=args.voice_filter_min_speech_ms,
+                min_start=0.0,
+                min_end=source_duration,
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            return 1
+        except Exception as exc:
+            print(f"WARN: voice filter failed, using fallback full-file region for {src_audio.name}: {exc}")
+            voice_regions = [VoiceRegion(0.0, source_duration)]
+
+        if args.voice_filter_mode == "off":
+            voice_regions = [VoiceRegion(0.0, source_duration)]
+
+        if not voice_regions:
+            no_voice_reason = ["no_voice_regions_detected"]
+            report_rows.append(
+                build_report_row(
+                    status="rejected",
+                    source_audio=str(src_audio.resolve()),
+                    chunk_path=None,
+                    start_sec=0.0,
+                    end_sec=source_duration,
+                    text="",
+                    reasons=no_voice_reason,
+                    seg_words=[],
+                    source_duration_ms=source_duration * 1000,
+                    voice_overlap_ms=0.0,
+                    voice_ratio=0.0,
+                    args=args,
+                )
+            )
+            rejected_seconds += source_duration
+            if args.voice_filter_export_quarantine:
+                removed_rows.append(
+                    SpeechRow(
+                        source_audio=str(src_audio.resolve()),
+                        start_sec=0.0,
+                        end_sec=source_duration,
+                        duration_sec=source_duration,
+                        reasons=no_voice_reason,
+                    )
+                )
+                filtered_seconds += source_duration
+            continue
+
+        for region in complement_regions(source_duration, voice_regions):
+            if region.end_sec <= region.start_sec:
+                continue
+            if args.voice_filter_export_quarantine:
+                removed_rows.append(
+                    SpeechRow(
+                        source_audio=str(src_audio.resolve()),
+                        start_sec=region.start_sec,
+                        end_sec=region.end_sec,
+                        duration_sec=region.end_sec - region.start_sec,
+                        reasons=["filtered_out_region"],
+                    )
+                )
+                filtered_seconds += region.end_sec - region.start_sec
+                if args.voice_filter_export_quarantine_snippets:
+                    snippet = filtered_out_dir / "snippets" / f"{base}_removed_{int(region.start_sec*1000)}_{int(region.end_sec*1000)}.wav"
+                    extract_segment(wav16, region.start_sec, region.end_sec, snippet, sample_rate=16000)
+
+        words: list[WordItem] = []
+        regions_to_process = voice_regions
+        for region_idx, region in enumerate(regions_to_process, start=1):
+            if region.end_sec <= region.start_sec:
+                continue
+            if (region.end_sec - region.start_sec) * 1000 < args.voice_filter_min_speech_ms:
+                reasons = ["too_few_voice_frames", "region_too_short"]
+                report_rows.append(
+                    build_report_row(
+                        status="rejected",
+                        source_audio=str(src_audio.resolve()),
+                        chunk_path=None,
+                        start_sec=region.start_sec,
+                        end_sec=region.end_sec,
+                        text="",
+                        reasons=reasons,
+                        seg_words=[],
+                        source_duration_ms=(region.end_sec - region.start_sec) * 1000,
+                        voice_overlap_ms=(region.end_sec - region.start_sec) * 1000,
+                        voice_ratio=1.0,
+                        args=args,
+                    )
+                )
+                rejected_seconds += region.end_sec - region.start_sec
+                continue
+
+            tmp = temp_regions_dir / f"{base}_region_{region_idx:03d}.wav"
+            extract_segment(wav16, region.start_sec, region.end_sec, tmp, sample_rate=16000)
+            try:
+                region_words = transcribe_words(
+                    model=model,
+                    audio_path_16k=tmp,
+                    language=args.language,
+                    beam_size=args.beam_size,
+                    best_of=args.best_of,
+                    temperature=args.temperature,
+                    use_whisperx_align=args.use_whisperx_align,
+                    device=args.device,
+                    whisperx_interpolate_method=args.whisperx_interpolate_method,
+                    segment_offset_sec=region.start_sec,
+                )
+            finally:
+                if tmp.exists():
+                    tmp.unlink()
+
+            words.extend(region_words)
 
         if not words:
-            print(f"WARNING: no words recognized for {src_audio.name}, skipping")
+            report_rows.append(
+                build_report_row(
+                    status="rejected",
+                    source_audio=str(src_audio.resolve()),
+                    chunk_path=None,
+                    start_sec=0.0,
+                    end_sec=source_duration,
+                    text="",
+                    reasons=["too_few_voice_frames"],
+                    seg_words=[],
+                    source_duration_ms=source_duration * 1000,
+                    voice_overlap_ms=0.0,
+                    voice_ratio=0.0,
+                    args=args,
+                )
+            )
+            rejected_seconds += source_duration
             continue
 
         boundaries = split_into_segments(words, seg_cfg)
-
         for left, right in boundaries:
             seg_words = words[left : right + 1]
             start_sec = seg_words[0].start
             end_sec = seg_words[-1].end
-            duration = end_sec - start_sec
             text = join_tokens(w.token for w in seg_words)
 
-            voice_ratio = speech_overlap_ratio(start_sec, end_sec, speech_segments) if args.voice_filter_mode != "off" else 1.0
-            quality = evaluate_segment_quality(seg_words, text, duration, voice_ratio, args)
+            duration = end_sec - start_sec
+            if not text:
+                continue
+
+            voice_overlap = segment_overlap_ratio(start_sec, end_sec, voice_regions)
+            voice_overlap_ms = voice_overlap * duration * 1000
+            source_duration_ms = duration * 1000
+
+            quality = evaluate_segment_quality(seg_words, text, duration, voice_overlap, args)
             if not quality.is_valid:
                 report_rows.append(
-                    {
-                        "status": "rejected",
-                        "source_audio": str(src_audio.resolve()),
-                        "chunk_audio": "",
-                        "start": round(start_sec, 3),
-                        "end": round(end_sec, 3),
-                        "duration": round(duration, 3),
-                        "word_count": quality.word_count,
-                        "avg_confidence": round(quality.avg_confidence, 4),
-                        "low_conf_ratio": round(quality.low_conf_ratio, 4),
-                        "voice_overlap_ratio": round(voice_ratio, 4),
-                        "reasons": quality.reasons,
-                        "text": text,
-                    }
+                    build_report_row(
+                        status="rejected",
+                        source_audio=str(src_audio.resolve()),
+                        chunk_path=None,
+                        start_sec=start_sec,
+                        end_sec=end_sec,
+                        text=text,
+                        reasons=quality.reasons,
+                        seg_words=seg_words,
+                        source_duration_ms=source_duration_ms,
+                        voice_overlap_ms=voice_overlap_ms,
+                        voice_ratio=voice_overlap,
+                        args=args,
+                    )
                 )
+                rejected_seconds += duration
                 continue
 
             global_idx += 1
@@ -644,7 +956,7 @@ def main() -> int:
             chunk_path = chunks_dir / chunk_name
             text_path = transcripts_dir / txt_name
 
-            extract_chunk(wav24, start_sec, end_sec, chunk_path)
+            extract_segment(wav24, start_sec, end_sec, chunk_path, sample_rate=24000)
             text_path.write_text(text, encoding="utf-8")
 
             if first_chunk is None:
@@ -657,21 +969,22 @@ def main() -> int:
                 }
             )
             report_rows.append(
-                {
-                    "status": "accepted",
-                    "source_audio": str(src_audio.resolve()),
-                    "chunk_audio": str(chunk_path.resolve()),
-                    "start": round(start_sec, 3),
-                    "end": round(end_sec, 3),
-                    "duration": round(duration, 3),
-                    "word_count": quality.word_count,
-                    "avg_confidence": round(quality.avg_confidence, 4),
-                    "low_conf_ratio": round(quality.low_conf_ratio, 4),
-                    "voice_overlap_ratio": round(voice_ratio, 4),
-                    "reasons": [],
-                    "text": text,
-                }
+                build_report_row(
+                    status="accepted",
+                    source_audio=str(src_audio.resolve()),
+                    chunk_path=chunk_path,
+                    start_sec=start_sec,
+                    end_sec=end_sec,
+                    text=text,
+                    reasons=[],
+                    seg_words=seg_words,
+                    source_duration_ms=source_duration_ms,
+                    voice_overlap_ms=voice_overlap_ms,
+                    voice_ratio=voice_overlap,
+                    args=args,
+                )
             )
+            accepted_seconds += duration
 
     if not rows:
         print("ERROR: no dataset rows produced")
@@ -694,17 +1007,40 @@ def main() -> int:
     print(f"Reference audio: {ref_audio}")
 
     report_json, report_csv = write_quality_reports(output_root, args.report_name, report_rows)
-    accepted_count = sum(1 for r in report_rows if r.get("status") == "accepted")
-    rejected_count = sum(1 for r in report_rows if r.get("status") == "rejected")
+
+    removed_path: Path | None = None
+    if args.voice_filter_export_quarantine:
+        removed_path = write_removed_segments(removed_rows, filtered_out_dir)
+
+    summary = {
+        "total_input_files": total_processed_files,
+        "accepted_rows": len(rows),
+        "rejected_rows": len([r for r in report_rows if r["status"] == "rejected"]),
+        "accepted_seconds": round(accepted_seconds, 3),
+        "rejected_seconds": round(rejected_seconds, 3),
+        "filtered_seconds": round(filtered_seconds, 3),
+        "source_seconds": round(source_seconds_total, 3),
+        "manifest": str(manifest_path),
+        "report_json": str(report_json),
+        "report_csv": str(report_csv),
+        "filtered_out_jsonl": str(removed_path) if removed_path else "",
+    }
+    metadata_path = write_run_metadata(output_root, args, summary)
+
+    accepted_count = len([r for r in report_rows if r.get("status") == "accepted"])
+    rejected_count = len([r for r in report_rows if r.get("status") == "rejected"])
     print(f"Accepted segments: {accepted_count}")
     print(f"Rejected segments: {rejected_count}")
     print(f"Quality report (json): {report_json}")
     print(f"Quality report (csv): {report_csv}")
+    print(f"Run metadata: {metadata_path}")
+    if removed_path:
+        print(f"Quarantine rows: {removed_path}")
 
     if args.validate_manifest:
         validator = root_dir / "scripts" / "validate_manifest.py"
         cmd = [sys.executable, str(validator), "--input_jsonl", str(manifest_path)]
-        subprocess.run(cmd, check=True)
+        run_ffmpeg(cmd)
 
     return 0
 

@@ -4,7 +4,7 @@ This folder contains helper scripts for Qwen3TTS training and dataset preparatio
 
 ## Automated dataset builder (input audio -> train_raw.jsonl)
 
-Build a dataset from raw audio files with pause-based chunking and word-level ASR:
+Build a dataset from raw audio files with pre-ASR voice filtering:
 
 ```bash
 source .venv/bin/activate
@@ -12,8 +12,12 @@ python scripts/build_dataset_from_audio.py \
   --input_dir /path/to/raw_audio \
   --output_root experiments/qwen3_ru_en_speaker_v1/dataset_auto \
   --language ru \
-  --voice_filter_mode hybrid \
-  --max_no_speech_prob 0.80 \
+  --voice_filter_mode silero \
+  --voice_filter_min_speech_ms 300 \
+  --voice_filter_min_silence_ms 250 \
+  --voice_filter_merge_gap_ms 150 \
+  --voice_filter_min_coverage 0.75 \
+  --voice_filter_export_quarantine \
   --use_whisperx_align \
   --validate_manifest
 ```
@@ -23,18 +27,31 @@ Output:
 - transcripts: `.../dataset_auto/transcripts/*.txt`
 - manifest: `.../dataset_auto/manifests/train_raw.jsonl`
 - quality report: `.../dataset_auto/reports/quality_report.{json,csv}`
+- optional quarantine: `.../dataset_auto/filtered_out/removed_segments.jsonl`, snippets: `.../dataset_auto/filtered_out/snippets/*.wav`
+- run metadata: `.../dataset_auto/filtered_out/run_metadata.json`
 
 Optional:
 - pass fixed reference voice with `--ref_audio /path/to/ref.wav`
-- tune segmentation thresholds with `--min_pause`, `--target_duration`, `--max_duration`
-- tune speech filtering with `--voice_filter_mode`, `--max_no_speech_prob`, `--min_word_voice_overlap`, `--min_segment_voice_ratio`
-- tune old filtering with `--min_words`, `--min_avg_confidence`, `--max_low_conf_ratio`
+- tune segmentation with `--min_pause`, `--target_duration`, `--max_duration`
+- tune text quality with `--min_words`, `--min_chars`, `--min_avg_confidence`, `--max_low_conf_ratio`
 - enable WhisperX boundary refinement with `--use_whisperx_align`
 
 `voice_filter_mode`:
-- `off`: legacy behavior (no additional non-voice filtering)
-- `hybrid` (default): reject non-speech ASR segments using `no_speech_prob` and track voice overlap for each chunk
-- `strict`: same as `hybrid` plus per-word overlap filtering before chunking
+- `off`: legacy mode, no pre-ASR filtering (compatibility path)
+- `silero` (default): primary voice-region detector path
+- `vad`: same behavior as `silero`
+- `whisper` / `whisper_only`: whisper-style fallback path
+- `hybrid`, `strict`, `legacy`: compatibility aliases
+
+Strictness controls:
+- `--voice_filter_min_speech_ms` — minimum region length kept as speech
+- `--voice_filter_min_silence_ms` — minimum silence length considered split/gap
+- `--voice_filter_merge_gap_ms` — merges close speech regions
+- `--voice_filter_min_coverage` — minimum speech ratio inside final chunk
+
+Validation and notes:
+- `--voice_filter_export_quarantine` emits filtered-out regions for audit.
+- Rejection reasons are machine-parseable, including `no_voice_regions_detected`, `non_voice_ratio_too_high`, `too_few_voice_frames`, `region_too_short`, `too_many_low_confidence_words`, and others.
 
 WhisperX notes:
 - WhisperX is optional, but if `--use_whisperx_align` is enabled the run is fail-fast.
@@ -45,6 +62,20 @@ WhisperX notes:
 source .venv/bin/activate
 pip install whisperx
 ```
+
+## Smoke smoke: voice filter verification
+
+Run the smoke command to validate non-voice filtering behavior on a synthetic input set:
+
+```bash
+source .venv/bin/activate
+bash scripts/run_voice_filter_smoke.sh
+```
+
+Expected output:
+- printed acceptance summary,
+- generated manifest/report under `/tmp/qwen3tts_smoke_output/...`,
+- `quality_report` contains at least one explicit non-voice rejection reason.
 
 ## Validation
 
