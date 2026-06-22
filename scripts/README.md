@@ -12,6 +12,8 @@ python scripts/build_dataset_from_audio.py \
   --input_dir /path/to/raw_audio \
   --output_root experiments/qwen3_ru_en_speaker_v1/dataset_auto \
   --language ru \
+  --voice_filter_mode hybrid \
+  --max_no_speech_prob 0.80 \
   --use_whisperx_align \
   --validate_manifest
 ```
@@ -25,8 +27,14 @@ Output:
 Optional:
 - pass fixed reference voice with `--ref_audio /path/to/ref.wav`
 - tune segmentation thresholds with `--min_pause`, `--target_duration`, `--max_duration`
-- tune filtering with `--min_words`, `--min_avg_confidence`, `--max_low_conf_ratio`
+- tune speech filtering with `--voice_filter_mode`, `--max_no_speech_prob`, `--min_word_voice_overlap`, `--min_segment_voice_ratio`
+- tune old filtering with `--min_words`, `--min_avg_confidence`, `--max_low_conf_ratio`
 - enable WhisperX boundary refinement with `--use_whisperx_align`
+
+`voice_filter_mode`:
+- `off`: legacy behavior (no additional non-voice filtering)
+- `hybrid` (default): reject non-speech ASR segments using `no_speech_prob` and track voice overlap for each chunk
+- `strict`: same as `hybrid` plus per-word overlap filtering before chunking
 
 WhisperX notes:
 - WhisperX is optional, but if `--use_whisperx_align` is enabled the run is fail-fast.

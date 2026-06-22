@@ -36,6 +36,16 @@ Recommendation:
 - No clipping/distortion
 - Consistent loudness and low background noise
 - Avoid duplicated or near-duplicated samples
+- No music, music-like intros/outros, or sustained non-voice content must pass into accepted chunks.
+- In `build_dataset_from_audio.py`, non-voice filtering is enabled by default with
+  `--voice_filter_mode hybrid`.
+- Use `--voice_filter_mode off` to keep legacy behavior when you want zero filtering drift for existing datasets.
+
+### Accepted segment purity rules (applies when filtering is on)
+- Segment must have low `no_speech` behavior (`segment.no_speech_prob` below threshold).
+- Segments with low speech overlap are rejected (`insufficient_voice_coverage` in report).
+- In `strict` mode, words with low overlap to detected speech are removed before chunking.
+- Dataset manifest schema remains unchanged (`audio`, `text`, `ref_audio`), only filtering behavior changes.
 
 ---
 

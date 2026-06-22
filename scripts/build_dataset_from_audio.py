@@ -44,6 +44,12 @@ class SegmentItem:
 
 
 @dataclass
+class SpeechSegment:
+    start: float
+    end: float
+
+
+@dataclass
 class SegmentConfig:
     min_duration: float
     target_duration: float
@@ -99,6 +105,37 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--low_confidence_threshold", type=float, default=0.5)
     parser.add_argument("--min_avg_confidence", type=float, default=0.45)
     parser.add_argument("--max_low_conf_ratio", type=float, default=0.35)
+    parser.add_argument(
+        "--voice_filter_mode",
+        choices=["off", "hybrid", "strict"],
+        default="hybrid",
+        help=(
+            "off: disable additional non-voice filtering (legacy behavior); "
+            "hybrid: reject whisper segments with high no_speech_prob; "
+            "strict: additionally require high speech overlap for each segment"
+        ),
+    )
+    parser.add_argument(
+        "--max_no_speech_prob",
+        type=float,
+        default=0.80,
+        help="Maximum segment no_speech_prob for hybrid/strict filtering.",
+    )
+    parser.add_argument(
+        "--min_word_voice_overlap",
+        type=float,
+        default=0.65,
+        help=(
+            "In strict mode, minimum overlap ratio for every word span with accepted speech spans. "
+            "Words below this overlap are treated as non-voice."
+        ),
+    )
+    parser.add_argument(
+        "--min_segment_voice_ratio",
+        type=float,
+        default=0.75,
+        help="Minimum voice-overlap ratio required for a chunk to be accepted (hybrid/strict).",
+    )
     parser.add_argument(
         "--report_name",
         default="quality_report",
@@ -195,6 +232,59 @@ def join_tokens(tokens: Iterable[str]) -> str:
     return " ".join(out).strip()
 
 
+def _coerce_prob(value: object) -> float:
+    try:
+        probability = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return max(0.0, min(1.0, probability))
+
+
+def extract_speech_segments(
+    segments: Iterable,
+    max_no_speech_prob: float,
+    mode: str,
+) -> list[SpeechSegment]:
+    speech: list[SpeechSegment] = []
+
+    if mode == "off":
+        return speech
+
+    for segment in segments:
+        if segment.start is None or segment.end is None:
+            continue
+        start = float(segment.start)
+        end = float(segment.end)
+        if end <= start:
+            continue
+
+        no_speech_prob = _coerce_prob(getattr(segment, "no_speech_prob", 1.0))
+        if no_speech_prob > max_no_speech_prob:
+            continue
+
+        speech.append(SpeechSegment(start=start, end=end))
+
+    return speech
+
+
+def speech_overlap_ratio(start: float, end: float, speech_segments: list[SpeechSegment]) -> float:
+    if not speech_segments:
+        return 1.0
+
+    duration = max(0.0, end - start)
+    if duration <= 0.0:
+        return 0.0
+
+    overlap = 0.0
+    for seg in speech_segments:
+        overlap_start = max(start, seg.start)
+        overlap_end = min(end, seg.end)
+        if overlap_end > overlap_start:
+            overlap += overlap_end - overlap_start
+
+    return min(1.0, overlap / duration)
+
+
 def transcribe_words(
     model,
     audio_path_16k: Path,
@@ -202,10 +292,13 @@ def transcribe_words(
     beam_size: int,
     best_of: int,
     temperature: float,
+    voice_filter_mode: str,
+    max_no_speech_prob: float,
+    min_word_voice_overlap: float,
     use_whisperx_align: bool,
     device: str,
     whisperx_interpolate_method: str,
-) -> list[WordItem]:
+) -> tuple[list[WordItem], list[SpeechSegment]]:
     segments, info = model.transcribe(
         str(audio_path_16k),
         language=language,
@@ -218,9 +311,15 @@ def transcribe_words(
         vad_parameters={"min_silence_duration_ms": 400, "speech_pad_ms": 300},
     )
     segments = list(segments)
+    speech_segments = extract_speech_segments(segments, max_no_speech_prob=max_no_speech_prob, mode=voice_filter_mode)
 
     words: list[WordItem] = []
     for segment in segments:
+        if voice_filter_mode != "off":
+            no_speech_prob = _coerce_prob(getattr(segment, "no_speech_prob", 1.0))
+            if no_speech_prob > max_no_speech_prob:
+                continue
+
         if not getattr(segment, "words", None):
             continue
         for w in segment.words:
@@ -229,11 +328,15 @@ def transcribe_words(
             token = clean_token(w.word)
             if not token:
                 continue
+            if voice_filter_mode == "strict":
+                overlap = speech_overlap_ratio(float(w.start), float(w.end), speech_segments)
+                if overlap < min_word_voice_overlap:
+                    continue
             confidence = float(getattr(w, "probability", 1.0) or 1.0)
             words.append(WordItem(token=token, start=float(w.start), end=float(w.end), confidence=confidence))
 
     if not use_whisperx_align:
-        return words
+        return words, speech_segments
 
     try:
         import whisperx
@@ -294,7 +397,7 @@ def transcribe_words(
 
         if aligned_words:
             print(f"WhisperX alignment applied for {audio_path_16k.name}: {len(aligned_words)} words")
-            return aligned_words
+            return aligned_words, speech_segments
 
         raise RuntimeError(
             f"WhisperX returned no aligned words for {audio_path_16k.name}. "
@@ -339,6 +442,7 @@ def evaluate_segment_quality(
     seg_words: list[WordItem],
     text: str,
     duration: float,
+    voice_overlap_ratio: float,
     args: argparse.Namespace,
 ) -> SegmentQuality:
     word_count = len(seg_words)
@@ -359,6 +463,8 @@ def evaluate_segment_quality(
         reasons.append("avg_confidence_too_low")
     if low_conf_ratio > args.max_low_conf_ratio:
         reasons.append("too_many_low_confidence_words")
+    if args.voice_filter_mode != "off" and voice_overlap_ratio < args.min_segment_voice_ratio:
+        reasons.append("insufficient_voice_coverage")
 
     return SegmentQuality(
         word_count=word_count,
@@ -388,6 +494,7 @@ def write_quality_reports(output_root: Path, report_name: str, report_rows: list
         "word_count",
         "avg_confidence",
         "low_conf_ratio",
+        "voice_overlap_ratio",
         "reasons",
         "text",
     ]
@@ -481,13 +588,16 @@ def main() -> int:
         convert_audio(src_audio, wav16, sample_rate=16000)
         convert_audio(src_audio, wav24, sample_rate=24000)
 
-        words = transcribe_words(
+        words, speech_segments = transcribe_words(
             model=model,
             audio_path_16k=wav16,
             language=args.language,
             beam_size=args.beam_size,
             best_of=args.best_of,
             temperature=args.temperature,
+            voice_filter_mode=args.voice_filter_mode,
+            max_no_speech_prob=args.max_no_speech_prob,
+            min_word_voice_overlap=args.min_word_voice_overlap,
             use_whisperx_align=args.use_whisperx_align,
             device=args.device,
             whisperx_interpolate_method=args.whisperx_interpolate_method,
@@ -506,7 +616,8 @@ def main() -> int:
             duration = end_sec - start_sec
             text = join_tokens(w.token for w in seg_words)
 
-            quality = evaluate_segment_quality(seg_words, text, duration, args)
+            voice_ratio = speech_overlap_ratio(start_sec, end_sec, speech_segments) if args.voice_filter_mode != "off" else 1.0
+            quality = evaluate_segment_quality(seg_words, text, duration, voice_ratio, args)
             if not quality.is_valid:
                 report_rows.append(
                     {
@@ -519,6 +630,7 @@ def main() -> int:
                         "word_count": quality.word_count,
                         "avg_confidence": round(quality.avg_confidence, 4),
                         "low_conf_ratio": round(quality.low_conf_ratio, 4),
+                        "voice_overlap_ratio": round(voice_ratio, 4),
                         "reasons": quality.reasons,
                         "text": text,
                     }
@@ -555,6 +667,7 @@ def main() -> int:
                     "word_count": quality.word_count,
                     "avg_confidence": round(quality.avg_confidence, 4),
                     "low_conf_ratio": round(quality.low_conf_ratio, 4),
+                    "voice_overlap_ratio": round(voice_ratio, 4),
                     "reasons": [],
                     "text": text,
                 }
