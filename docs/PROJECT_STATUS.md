@@ -26,8 +26,10 @@ Reference docs:
 - Training policy: use the documented semi-automatic candidate review protocol in
   `docs/CHECKPOINT_SELECTION_PROTOCOL.md`; project-local orchestration now
   supports epoch-by-epoch checkpoints, eval packs, automatic metrics,
-  hard-reject gates, and candidate manifests, but full automatic stopping and
-  copied candidate WAV export are not implemented yet.
+  hard-reject gates, semi-auto early stopping, and candidate manifests. Default
+  stopping values are `min_epochs=2`, `max_epochs=6`, `patience=2`, and
+  `top_candidates=4`. Copied candidate WAV export and selected-checkpoint
+  persistence are not implemented yet; the final winner remains human-selected.
 - Raw source audio in `datasets/voices/**/Input/` is never committed.
 - Commit code, docs, scaffolds, small config, and reproducible patches only.
 

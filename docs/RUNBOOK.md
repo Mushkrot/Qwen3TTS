@@ -114,7 +114,9 @@ dataset quality gate has been reviewed. It performs:
 5. append-only `metrics.jsonl` logging;
 6. automatic checkpoint metrics and a numeric checkpoint score;
 7. one `checkpoint_gate` hard-reject decision per checkpoint;
-8. final `candidate_selection` metadata and `candidate_manifest.json`.
+8. one `early_stop_decision` per checkpoint;
+9. a final `run_stop` row when the loop stops;
+10. final `candidate_selection` metadata and `candidate_manifest.json`.
 
 Real command shape:
 
@@ -125,7 +127,10 @@ python tools/train_voice_candidates.py \
   --train_raw_jsonl datasets/voices/Baritone/Ready/<run_name>/manifests/train_raw.jsonl \
   --output_root experiments/qwen3_ru_en_speaker_v1/runs \
   --run_name baritone_sft_candidates_001 \
-  --max_epochs 1 \
+  --min_epochs 2 \
+  --max_epochs 6 \
+  --patience 2 \
+  --top_candidates 4 \
   --speaker_name speaker_target
 ```
 
@@ -141,11 +146,12 @@ bash scripts/run_train_voice_candidates_smoke.sh
 The smoke writes only under `/tmp/qwen3tts_train_voice_candidates_smoke` and
 creates sentinel checkpoint/eval files. It proves the project orchestration
 contract without loading Qwen, Torch, or soundfile. It also verifies that
-`metrics.jsonl` contains at least five `sample_metrics` rows and one
-`checkpoint_score` row with a numeric `score`, a `metric_summary`, and a
-`warnings` list. Stage 5 smoke also verifies at least one `checkpoint_gate`
-row, one `candidate_selection` row, and a parseable `candidate_manifest.json`.
-It prints selected candidate count and rejected checkpoint count.
+`metrics.jsonl` contains `sample_metrics`, one `checkpoint_score` row per
+checkpoint, one `checkpoint_gate` row per checkpoint, `early_stop_decision`
+rows, a final `run_stop` row, and one `candidate_selection` row. The current
+default smoke runs more than one stub epoch but stops before `max_epochs=6`.
+It prints stop reason, epochs completed, selected candidate count, and rejected
+checkpoint count.
 
 Current Stage 4/5 metrics and gates:
 
@@ -174,6 +180,29 @@ Rejected checkpoints stay auditable in `metrics.jsonl` and in
 `candidate_manifest.json.rejected_checkpoints`; they must not enter
 `candidate_manifest.json.candidates`.
 
+Semi-auto early stopping defaults:
+
+- `min_epochs=2`;
+- `max_epochs=6`;
+- `patience=2`;
+- `top_candidates=4`;
+- `candidate_floor=3`.
+
+Current stop reasons:
+
+- `min_epochs_pending`: continue until the minimum epoch floor is reached;
+- `patience_exhausted`: stop after two consecutive non-improving viable epochs
+  by default;
+- `quality_degradation`: stop when a hard-rejected checkpoint shows quality
+  degradation after the minimum epoch floor;
+- `max_epochs_reached`: stop at the maximum epoch cap;
+- hard failure: prepare/train/eval command failures abort the run and write a
+  `failure` row instead of producing a candidate.
+
+Naturalness is represented by the proxy metrics and gates above. The system no
+longer requires owner listening after every epoch, but the final winner remains
+human-selected from the top candidates in `candidate_manifest.json`.
+
 Backend modes are explicit. `--metrics_mode auto` resolves to audio metrics in
 stub smoke and real runs, `--metrics_mode off` records disabled audio metrics,
 `--text_match_backend auto` resolves to stub text match during smoke, and
@@ -191,11 +220,12 @@ code, tests, docs, scaffolds, small templates, and intentional metadata.
 ## Checkpoint selection and review
 
 Use `docs/CHECKPOINT_SELECTION_PROTOCOL.md` before comparing training checkpoints.
-The current policy is semi-automatic candidate review: automatic metrics and
-hard gates narrow a completed run to up to 3-4 candidate checkpoints in
-`candidate_manifest.json`, then the owner chooses the final voice by listening.
-This is not full automatic early stopping and does not yet copy a final WAV
-review pack.
+The current policy is semi-automatic candidate review: automatic metrics,
+hard gates, and project-local early stopping narrow a run to up to 3-4
+candidate checkpoints in `candidate_manifest.json`, then the owner chooses the
+final voice by listening. The run no longer requires listening after every
+epoch. Copied candidate WAV review packs and selected-checkpoint persistence
+are not implemented yet.
 
 Use `docs/templates/CANDIDATE_REVIEW_REPORT.md` as the report format when a
 candidate review pack is generated.

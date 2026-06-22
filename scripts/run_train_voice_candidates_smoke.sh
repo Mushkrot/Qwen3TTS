@@ -25,7 +25,6 @@ printf '%s\n' \
   --train_raw_jsonl "${MANIFEST}" \
   --output_root "${RUN_ROOT}" \
   --run_name smoke \
-  --max_epochs 1 \
   --speaker_name speaker_target \
   --execution_mode stub
 
@@ -34,6 +33,7 @@ PREPARED="${RUN_DIR}/manifests/train_with_codes.jsonl"
 METRICS="${RUN_DIR}/metrics.jsonl"
 CHECKPOINT="${RUN_DIR}/train/epoch-0/checkpoint-epoch-0/STUB_CHECKPOINT.txt"
 EVAL_DIR="${RUN_DIR}/eval/epoch-0"
+EVAL_ROOT="${RUN_DIR}/eval"
 CANDIDATE_MANIFEST="${RUN_DIR}/candidate_manifest.json"
 
 for required in \
@@ -64,6 +64,8 @@ manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 sample_rows = [row for row in rows if row.get("event") == "sample_metrics"]
 score_rows = [row for row in rows if row.get("event") == "checkpoint_score"]
 gate_rows = [row for row in rows if row.get("event") == "checkpoint_gate"]
+decision_rows = [row for row in rows if row.get("event") == "early_stop_decision"]
+run_stop_rows = [row for row in rows if row.get("event") == "run_stop"]
 selection_rows = [row for row in rows if row.get("event") == "candidate_selection"]
 required_numeric = (
     "duration_seconds",
@@ -83,17 +85,49 @@ if not score_rows:
     raise SystemExit("ERROR: missing checkpoint_score row")
 if not gate_rows:
     raise SystemExit("ERROR: missing checkpoint_gate row")
+if not decision_rows:
+    raise SystemExit("ERROR: missing early_stop_decision row")
+if not run_stop_rows:
+    raise SystemExit("ERROR: missing run_stop row")
 if not selection_rows:
     raise SystemExit("ERROR: missing candidate_selection row")
 if not isinstance(manifest.get("candidates"), list):
     raise SystemExit("ERROR: candidate_manifest.candidates is not a list")
 if not isinstance(manifest.get("rejected_checkpoints"), list):
     raise SystemExit("ERROR: candidate_manifest.rejected_checkpoints is not a list")
+if manifest.get("candidate_floor") != 3:
+    raise SystemExit("ERROR: candidate_manifest.candidate_floor does not match default")
+if not isinstance(manifest.get("limited_reasons"), list):
+    raise SystemExit("ERROR: candidate_manifest.limited_reasons is not a list")
+if not isinstance(manifest.get("stop_summary"), dict):
+    raise SystemExit("ERROR: candidate_manifest.stop_summary is not an object")
 
 for row in sample_rows:
     for key in required_numeric:
         if not isinstance(row.get(key), (int, float)):
             raise SystemExit(f"ERROR: sample_metrics.{key} is not numeric for {row.get('label')}")
+
+run_stop = run_stop_rows[-1]
+epochs_completed = run_stop.get("epochs_completed")
+if not isinstance(epochs_completed, int):
+    raise SystemExit("ERROR: run_stop.epochs_completed is not an integer")
+if not 1 < epochs_completed < 6:
+    raise SystemExit(f"ERROR: expected smoke to complete 2-5 epochs, got {epochs_completed}")
+if len(decision_rows) != epochs_completed:
+    raise SystemExit("ERROR: early_stop_decision count does not match completed epochs")
+if len(score_rows) != epochs_completed:
+    raise SystemExit("ERROR: checkpoint_score count does not match completed epochs")
+if len(gate_rows) != epochs_completed:
+    raise SystemExit("ERROR: checkpoint_gate count does not match completed epochs")
+if len(sample_rows) < epochs_completed * 5:
+    raise SystemExit("ERROR: not enough sample_metrics rows for completed epochs")
+if manifest["stop_summary"].get("reason") != run_stop.get("reason"):
+    raise SystemExit("ERROR: manifest stop reason does not match run_stop")
+if manifest["stop_summary"].get("epochs_completed") != epochs_completed:
+    raise SystemExit("ERROR: manifest epochs_completed does not match run_stop")
+for key in ("reason", "best_epoch", "best_score", "epochs_completed"):
+    if key not in manifest["stop_summary"]:
+        raise SystemExit(f"ERROR: stop_summary missing {key}")
 
 score = score_rows[-1]
 if not isinstance(score.get("score"), (int, float)):
@@ -139,16 +173,23 @@ if rejected_epochs & candidate_epochs:
         + ",".join(str(epoch) for epoch in sorted(rejected_epochs & candidate_epochs))
     )
 
-print(f"Sample metric rows: {len(sample_rows)}")
-print(f"Checkpoint score rows: {len(score_rows)}")
-print(f"Checkpoint score: {float(score['score']):.3f}")
-print("Checkpoint warnings: " + ",".join(str(item) for item in score["warnings"]))
-print(f"Checkpoint gate rows: {len(gate_rows)}")
-print(f"Last gate hard rejected: {gate['hard_rejected']}")
-print("Last gate reject reasons: " + ",".join(str(item) for item in gate["reject_reasons"]))
-print(f"Candidate selection rows: {len(selection_rows)}")
-print(f"Selected candidates: {manifest_candidate_count}")
-print(f"Rejected checkpoints: {manifest_rejected_count}")
+def emit(message):
+    sys.stdout.write(f"{message}\n")
+
+
+emit(f"Sample metric rows: {len(sample_rows)}")
+emit(f"Checkpoint score rows: {len(score_rows)}")
+emit(f"Checkpoint score: {float(score['score']):.3f}")
+emit("Checkpoint warnings: " + ",".join(str(item) for item in score["warnings"]))
+emit(f"Checkpoint gate rows: {len(gate_rows)}")
+emit(f"Last gate hard rejected: {gate['hard_rejected']}")
+emit("Last gate reject reasons: " + ",".join(str(item) for item in gate["reject_reasons"]))
+emit(f"Early stop decision rows: {len(decision_rows)}")
+emit(f"Run stop reason: {run_stop['reason']}")
+emit(f"Epochs completed: {epochs_completed}")
+emit(f"Candidate selection rows: {len(selection_rows)}")
+emit(f"Selected candidates: {manifest_candidate_count}")
+emit(f"Rejected checkpoints: {manifest_rejected_count}")
 PY
 )"
 
@@ -159,4 +200,4 @@ echo "Checkpoint sentinel: ${CHECKPOINT}"
 echo "Candidate manifest: ${CANDIDATE_MANIFEST}"
 printf '%s\n' "${METRIC_SUMMARY}"
 echo "Eval files:"
-find "${EVAL_DIR}" -maxdepth 1 -type f | sort
+find "${EVAL_ROOT}" -maxdepth 2 -type f | sort

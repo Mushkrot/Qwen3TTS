@@ -17,9 +17,10 @@ after each checkpoint. Stage 4 adds automatic `sample_metrics` and
 `checkpoint_score` rows with numeric scores and warnings. Stage 5 adds
 `checkpoint_gate` hard-reject rows plus `candidate_selection` metadata and a
 `candidate_manifest.json` that excludes hard-rejected checkpoints from the
-review set. This still does not claim that upstream Qwen3-TTS has native
-optimal stopping, and it does not yet copy/export final candidate WAV packs or
-stop training automatically.
+review set. Stage 6 implements project-local semi-auto early stopping with
+`early_stop_decision` and `run_stop` rows. This still does not claim that
+upstream Qwen3-TTS has native optimal stopping, and it does not yet copy/export
+final candidate WAV packs or persist the owner-selected checkpoint.
 
 ## Scope
 
@@ -116,7 +117,7 @@ matching. `speaker_similarity` depends on `--speaker_similarity_backend` and may
 be null. Unavailable optional metrics add warnings but must not prevent a
 numeric checkpoint score.
 
-The project has external evidence that later epochs can make generated speech progressively faster in upstream fine-tuning (`QwenLM/Qwen3-TTS#179`, linked PR `#178` still unmerged at the time this protocol was written). Therefore pace metrics are mandatory for any semi-automatic stopping implementation.
+The project has external evidence that later epochs can make generated speech progressively faster in upstream fine-tuning (`QwenLM/Qwen3-TTS#179`, linked PR `#178` still unmerged at the time this protocol was written). Therefore pace metrics are mandatory for semi-automatic stopping. Naturalness is currently represented by proxy metrics and hard gates, not by a learned perceptual quality model.
 
 ## Hard Reject Gates
 
@@ -159,9 +160,9 @@ After hard gates, rank remaining checkpoints with a weighted score. Initial weig
 | Speaker similarity, when available | 20 |
 | Loss stability, as supporting evidence | 10 |
 
-In the current Stage 4/5 implementation, unavailable `speaker_similarity` adds
+In the current implementation, unavailable `speaker_similarity` adds
 a warning and a small score penalty while keeping the checkpoint score numeric.
-The Stage 5 candidate selector ranks only non-rejected checkpoints, with up to
+The candidate selector ranks only non-rejected checkpoints, with up to
 `--top_candidates` entries written to `candidate_manifest.json`. A later copied
 audio export stage may redistribute optional metric weight across
 pace/duration stability, onset/offset quality, and text match, and should record
@@ -176,11 +177,13 @@ Tie break order:
 
 Prefer the earliest checkpoint when candidates are effectively tied. This matches the local project history where later epochs sometimes improved one axis while hurting naturalness or starts/ends.
 
-## Stopping Defaults
+## Semi-Auto Early Stopping
 
-These are proposed defaults for a later semi-automatic stopping layer. They are
-not fully implemented by Stage 5, which currently writes gates, scores, and a
-candidate manifest after the configured epoch loop completes.
+Stage 6 implements semi-auto early stopping in `tools/train_voice_candidates.py`.
+The orchestrator trains one epoch at a time, evaluates the checkpoint, writes
+`checkpoint_score` and `checkpoint_gate`, then appends an
+`early_stop_decision`. When the decision stops the loop, the run writes a final
+`run_stop` row and then writes `candidate_manifest.json`.
 
 ```text
 min_epochs = 2
@@ -191,20 +194,36 @@ candidate_floor = 3
 tie_break = earliest_checkpoint
 ```
 
-Future stopping rules:
+Default CLI values match the table above. Override them only when the run has a
+clear owner-approved reason.
 
-- always train at least `min_epochs`, unless training fails hard;
-- never train beyond `max_epochs` without an explicit owner decision;
-- stop when `patience` consecutive epochs do not improve the best viable score;
-- stop immediately when pace, duration, or onset/offset degradation crosses a hard reject threshold after a previously viable checkpoint exists;
-- stop when loss becomes NaN/Inf or checkpoint writing fails;
-- if fewer than `candidate_floor` viable candidates exist by `max_epochs`, export all viable candidates and mark the report as limited.
+Current stop and decision reasons:
+
+- `min_epochs_pending`: continue because fewer than `min_epochs` have completed;
+- `score_improved`: continue because the current viable score improved;
+- `patience_pending`: continue while non-improvement has not yet reached
+  `patience`;
+- `patience_exhausted`: stop after `patience` consecutive non-improving viable
+  epochs;
+- `quality_degradation`: stop after `min_epochs` when the current checkpoint is
+  hard-rejected for quality degradation such as pace acceleration, clipping,
+  bad duration, suspected cutoff, ASR mismatch, or sharp score drop;
+- `max_epochs_reached`: stop at `max_epochs` even if scores keep improving;
+- `no_viable_checkpoint`: continue/mark limited when no viable checkpoint exists.
+
+Hard failures such as prepare/train/eval command failure still abort the run and
+write a `failure` row. They are not candidate checkpoints.
+
+If fewer than `candidate_floor` viable candidates exist when the loop stops,
+`candidate_manifest.json.status` is `limited` and
+`limited_reasons` includes `candidate_count_below_floor`. The manifest records
+`candidate_floor` and a `stop_summary` copied from the final `run_stop` row.
 
 ## Candidate Export
 
-Stage 5 writes candidate metadata only. A later export layer should copy at most
-`top_candidates` candidates into a review pack. Candidate labels must not imply
-ranking certainty beyond the report:
+The current implementation writes candidate metadata only. A later export layer
+should copy at most `top_candidates` candidates into a review pack. Candidate
+labels must not imply ranking certainty beyond the report:
 
 ```text
 candidate_A_epoch0/
@@ -236,10 +255,12 @@ Use `docs/templates/CANDIDATE_REVIEW_REPORT.md` as the human-facing report templ
 ## Human Selection Gate
 
 The user should listen only to the 3-4 candidates selected by
-`candidate_manifest.json`, not every epoch. After a later export layer exists,
-those selected checkpoints can be copied into a review pack. The selected
-candidate becomes the active voice candidate only after the user records the
-final choice in the review report or a future `selected_checkpoint.json`.
+`candidate_manifest.json`, not every epoch. Semi-auto stopping decides when the
+run has enough evidence to stop; it does not choose the final voice. After a
+later export layer exists, those selected checkpoints can be copied into a
+review pack. The selected candidate becomes the active voice candidate only
+after the user records the final choice in the review report or a future
+`selected_checkpoint.json`.
 
 The report should preserve the reason for the choice because the best checkpoint may not be the highest automatic score when human naturalness, voice identity, or delivery feel differs from proxy metrics.
 
@@ -249,8 +270,9 @@ The current project-local orchestrator already runs training epoch by epoch,
 generates eval samples after each checkpoint, appends checkpoint/eval rows to
 `metrics.jsonl`, computes per-sample metrics, writes one numeric
 `checkpoint_score` row per checkpoint, writes `checkpoint_gate` hard-reject
-rows, and writes `candidate_manifest.json` with only non-rejected candidates.
-Later stages should add copied candidate audio export, automatic stopping
-decisions, and selected-checkpoint persistence using the defaults above.
+rows, appends `early_stop_decision` and `run_stop` rows, and writes
+`candidate_manifest.json` with only non-rejected candidates plus stop summary
+metadata. Later stages should add copied candidate audio export and
+selected-checkpoint persistence.
 
 Do not patch upstream `sft_12hz.py` to pretend it has built-in early stopping. Keep orchestration in project-local scripts so upstream behavior remains understandable and reproducible.

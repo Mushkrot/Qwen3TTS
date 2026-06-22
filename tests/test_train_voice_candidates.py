@@ -25,6 +25,7 @@ class TrainVoiceCandidatesContractTests(unittest.TestCase):
     def test_metric_schema_thresholds_weights_and_backend_modes(self) -> None:
         thresholds = self.module.metric_thresholds_row()
         gate_thresholds = self.module.hard_reject_thresholds_row()
+        stop_policy = self.module.early_stop_policy_row()
         weights = self.module.metric_weights_row()
         for key in (
             "duration_ratio_min",
@@ -59,6 +60,13 @@ class TrainVoiceCandidatesContractTests(unittest.TestCase):
         self.assertEqual(self.module.METRIC_EVENT_CHECKPOINT_SCORE, "checkpoint_score")
         self.assertEqual(self.module.METRIC_EVENT_CHECKPOINT_GATE, "checkpoint_gate")
         self.assertEqual(self.module.METRIC_EVENT_CANDIDATE_SELECTION, "candidate_selection")
+        self.assertEqual(self.module.METRIC_EVENT_EARLY_STOP_DECISION, "early_stop_decision")
+        self.assertEqual(self.module.METRIC_EVENT_RUN_STOP, "run_stop")
+        self.assertEqual(stop_policy["min_epochs"], 2)
+        self.assertEqual(stop_policy["max_epochs"], 6)
+        self.assertEqual(stop_policy["patience"], 2)
+        self.assertEqual(stop_policy["top_candidates"], 4)
+        self.assertEqual(stop_policy["candidate_floor"], 3)
         self.assertEqual(self.module.resolve_backend_mode("auto", "stub"), "stub")
         self.assertEqual(self.module.resolve_backend_mode("auto", "real"), "off")
         self.assertEqual(self.module.resolve_backend_mode("faster-whisper", "real"), "faster-whisper")
@@ -145,6 +153,35 @@ class TrainVoiceCandidatesContractTests(unittest.TestCase):
         self.assertEqual(selection["event"], "candidate_selection")
         self.assertEqual(selection["selected_epochs"], [1, 3])
         self.assertEqual(selection["rejected_epochs"], [0, 2])
+        stop_decision = self.module.EarlyStopDecision(
+            epoch=2,
+            should_stop=True,
+            reason="patience_exhausted",
+            best_epoch=0,
+            best_score=95.0,
+            epochs_without_improvement=2,
+            min_epochs_reached=True,
+        ).to_row()
+        self.assertEqual(stop_decision["event"], "early_stop_decision")
+        for key in (
+            "epoch",
+            "should_stop",
+            "reason",
+            "best_epoch",
+            "best_score",
+            "epochs_without_improvement",
+            "min_epochs_reached",
+        ):
+            self.assertIn(key, stop_decision)
+        run_stop = self.module.RunStop(
+            reason="patience_exhausted",
+            epoch=2,
+            best_epoch=0,
+            best_score=95.0,
+            epochs_completed=3,
+        ).to_row()
+        self.assertEqual(run_stop["event"], "run_stop")
+        self.assertEqual(run_stop["epochs_completed"], 3)
 
     def test_path_model_is_deterministic(self) -> None:
         paths = self.module.build_paths(Path("/tmp/out"), "Baritone", "smoke")
@@ -228,14 +265,47 @@ class TrainVoiceCandidatesContractTests(unittest.TestCase):
             "--train_raw_jsonl",
             "--output_root",
             "--run_name",
+            "--min_epochs",
             "--max_epochs",
+            "--patience",
+            "--early_stop_min_delta",
             "--top_candidates",
+            "--candidate_floor",
             "--speaker_name",
             "--hard_reject_text_match_min",
             "--hard_reject_pace_acceleration_max",
             "--hard_reject_score_drop_max",
         ):
             self.assertIn(option, completed.stdout)
+
+    def test_cli_rejects_invalid_early_stop_options(self) -> None:
+        invalid_args = (
+            ("--min_epochs", "0"),
+            ("--max_epochs", "0"),
+            ("--patience", "0"),
+            ("--min_epochs", "3", "--max_epochs", "2"),
+        )
+        for extra in invalid_args:
+            with self.subTest(extra=extra):
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "tools/train_voice_candidates.py",
+                        "--voice_name",
+                        "Baritone",
+                        "--train_raw_jsonl",
+                        "/tmp/train_raw.jsonl",
+                        "--output_root",
+                        "/tmp/out",
+                        *extra,
+                    ],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn("error:", completed.stderr)
 
     def test_stub_run_creates_checkpoint_eval_pack_and_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -551,6 +621,160 @@ class TrainVoiceCandidatesContractTests(unittest.TestCase):
             self.assertIn("duration_too_short", self.module.evaluate_checkpoint_gate(args, paths, short_score).reject_reasons)
             self.assertIn("duration_too_long", self.module.evaluate_checkpoint_gate(args, paths, long_score).reject_reasons)
 
+    def test_default_stub_run_stops_by_patience_before_max_epochs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_manifest = tmp_path / "train_raw.jsonl"
+            raw_manifest.write_text('{"audio":"a.wav","text":"hello","ref_audio":"a.wav"}\n', encoding="utf-8")
+            args = self.module.create_parser().parse_args(
+                [
+                    "--voice_name",
+                    "Baritone",
+                    "--train_raw_jsonl",
+                    str(raw_manifest),
+                    "--output_root",
+                    str(tmp_path / "out"),
+                    "--run_name",
+                    "default_stop",
+                    "--execution_mode",
+                    "stub",
+                ]
+            )
+            paths = self.module.orchestrate(args)
+            rows = self.module.read_metrics(paths.metrics_jsonl)
+            train_start_rows = [row for row in rows if row["event"] == "train_start"]
+            decision_rows = [row for row in rows if row["event"] == "early_stop_decision"]
+            run_stop_rows = [row for row in rows if row["event"] == "run_stop"]
+            self.assertEqual(len(train_start_rows), 3)
+            self.assertEqual(len(decision_rows), 3)
+            self.assertEqual(run_stop_rows[-1]["reason"], "patience_exhausted")
+            self.assertEqual(run_stop_rows[-1]["epoch"], 2)
+            self.assertEqual(run_stop_rows[-1]["epochs_completed"], 3)
+            self.assertLess(run_stop_rows[-1]["epochs_completed"], self.module.DEFAULT_MAX_EPOCHS)
+            manifest = json.loads(paths.candidate_manifest.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "ok")
+            self.assertEqual(manifest["candidate_floor"], self.module.DEFAULT_CANDIDATE_FLOOR)
+            self.assertEqual(manifest["candidate_count"], 3)
+            self.assertEqual(manifest["limited_reasons"], [])
+            self.assertEqual(manifest["stop_summary"]["reason"], "patience_exhausted")
+            self.assertEqual(manifest["stop_summary"]["best_epoch"], 0)
+            self.assertEqual(manifest["stop_summary"]["best_score"], 95.0)
+            self.assertEqual(manifest["stop_summary"]["epochs_completed"], 3)
+
+    def test_early_stop_respects_min_epoch_floor_before_degradation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self.module.build_paths(Path(tmp) / "out", "Baritone", "min_floor")
+            self.module.ensure_run_dirs(paths)
+            args = self.module.create_parser().parse_args(
+                [
+                    "--voice_name",
+                    "Baritone",
+                    "--train_raw_jsonl",
+                    "/tmp/train_raw.jsonl",
+                    "--output_root",
+                    "/tmp/out",
+                    "--execution_mode",
+                    "stub",
+                ]
+            )
+            for epoch in (0, 1):
+                gate = self.module.CheckpointGate(
+                    epoch=epoch,
+                    checkpoint_path=f"/tmp/checkpoint-{epoch}",
+                    hard_rejected=True,
+                    reject_reasons=("pace_accelerated",),
+                    warning_reasons=(),
+                    score=40.0,
+                    metric_summary={"pace_chars_per_sec_mean": 20.0},
+                    comparison={},
+                )
+                self.module.append_metrics(paths.metrics_jsonl, **gate.to_row())
+                decision = self.module.evaluate_early_stop_decision(args, paths)
+                if epoch == 0:
+                    self.assertFalse(decision.should_stop)
+                    self.assertEqual(decision.reason, "min_epochs_pending")
+                else:
+                    self.assertTrue(decision.should_stop)
+                    self.assertEqual(decision.reason, "quality_degradation")
+
+    def test_early_stop_max_epochs_reached_with_improving_scores(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self.module.build_paths(Path(tmp) / "out", "Baritone", "max_cap")
+            self.module.ensure_run_dirs(paths)
+            args = self.module.create_parser().parse_args(
+                [
+                    "--voice_name",
+                    "Baritone",
+                    "--train_raw_jsonl",
+                    "/tmp/train_raw.jsonl",
+                    "--output_root",
+                    "/tmp/out",
+                    "--execution_mode",
+                    "stub",
+                    "--min_epochs",
+                    "1",
+                    "--max_epochs",
+                    "3",
+                    "--patience",
+                    "5",
+                ]
+            )
+            decisions = []
+            for epoch, score in enumerate((80.0, 81.0, 82.0)):
+                gate = self.module.CheckpointGate(
+                    epoch=epoch,
+                    checkpoint_path=f"/tmp/checkpoint-{epoch}",
+                    hard_rejected=False,
+                    reject_reasons=(),
+                    warning_reasons=(),
+                    score=score,
+                    metric_summary={"pace_chars_per_sec_mean": 10.0},
+                    comparison={},
+                )
+                self.module.append_metrics(paths.metrics_jsonl, **gate.to_row())
+                decisions.append(self.module.evaluate_early_stop_decision(args, paths))
+            self.assertTrue(decisions[-1].should_stop)
+            self.assertEqual(decisions[-1].reason, "max_epochs_reached")
+            self.assertEqual(decisions[-1].epoch, 2)
+
+    def test_rejected_checkpoint_does_not_reset_patience_counter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self.module.build_paths(Path(tmp) / "out", "Baritone", "rejected_patience")
+            self.module.ensure_run_dirs(paths)
+            args = self.module.create_parser().parse_args(
+                [
+                    "--voice_name",
+                    "Baritone",
+                    "--train_raw_jsonl",
+                    "/tmp/train_raw.jsonl",
+                    "--output_root",
+                    "/tmp/out",
+                    "--execution_mode",
+                    "stub",
+                    "--min_epochs",
+                    "1",
+                    "--max_epochs",
+                    "6",
+                    "--patience",
+                    "2",
+                ]
+            )
+            gates = (
+                self.module.CheckpointGate(0, "/tmp/checkpoint-0", False, (), (), 95.0, {}, {}),
+                self.module.CheckpointGate(1, "/tmp/checkpoint-1", False, (), (), 94.0, {}, {}),
+                self.module.CheckpointGate(2, "/tmp/checkpoint-2", True, ("synthetic_reject",), (), 99.0, {}, {}),
+                self.module.CheckpointGate(3, "/tmp/checkpoint-3", False, (), (), 93.0, {}, {}),
+            )
+            decisions = []
+            for gate in gates:
+                self.module.append_metrics(paths.metrics_jsonl, **gate.to_row())
+                decisions.append(self.module.evaluate_early_stop_decision(args, paths))
+            self.assertFalse(decisions[2].should_stop)
+            self.assertEqual(decisions[2].epochs_without_improvement, 1)
+            self.assertTrue(decisions[3].should_stop)
+            self.assertEqual(decisions[3].reason, "patience_exhausted")
+            self.assertEqual(decisions[3].epochs_without_improvement, 2)
+
     def test_candidate_selection_excludes_rejected_high_score_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             paths = self.module.build_paths(Path(tmp) / "out", "Baritone", "selection")
@@ -591,12 +815,73 @@ class TrainVoiceCandidatesContractTests(unittest.TestCase):
             )
             self.module.append_metrics(paths.metrics_jsonl, **rejected.to_row())
             self.module.append_metrics(paths.metrics_jsonl, **viable.to_row())
+            self.module.append_metrics(
+                paths.metrics_jsonl,
+                **self.module.RunStop(
+                    reason="patience_exhausted",
+                    epoch=1,
+                    best_epoch=1,
+                    best_score=80.0,
+                    epochs_completed=2,
+                ).to_row(),
+            )
             selection = self.module.append_candidate_selection(args, paths)
             manifest = json.loads(paths.candidate_manifest.read_text(encoding="utf-8"))
             self.assertEqual(selection.selected_epochs, (1,))
             self.assertEqual(selection.rejected_epochs, (0,))
             self.assertEqual([candidate["epoch"] for candidate in manifest["candidates"]], [1])
             self.assertEqual([row["epoch"] for row in manifest["rejected_checkpoints"]], [0])
+            self.assertEqual(manifest["stop_summary"]["reason"], "patience_exhausted")
+            self.assertTrue(selection.limited)
+            self.assertEqual(manifest["status"], "limited")
+            self.assertEqual(manifest["limited_reasons"], ["candidate_count_below_floor"])
+
+    def test_candidate_manifest_limited_when_below_candidate_floor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self.module.build_paths(Path(tmp) / "out", "Baritone", "below_floor")
+            self.module.ensure_run_dirs(paths)
+            args = self.module.create_parser().parse_args(
+                [
+                    "--voice_name",
+                    "Baritone",
+                    "--train_raw_jsonl",
+                    "/tmp/train_raw.jsonl",
+                    "--output_root",
+                    "/tmp/out",
+                    "--execution_mode",
+                    "stub",
+                    "--candidate_floor",
+                    "3",
+                ]
+            )
+            viable = self.module.CheckpointGate(
+                epoch=0,
+                checkpoint_path="/tmp/run/train/epoch-0/checkpoint-epoch-0",
+                hard_rejected=False,
+                reject_reasons=(),
+                warning_reasons=(),
+                score=88.0,
+                metric_summary={},
+                comparison={},
+            )
+            self.module.append_metrics(paths.metrics_jsonl, **viable.to_row())
+            self.module.append_metrics(
+                paths.metrics_jsonl,
+                **self.module.RunStop(
+                    reason="max_epochs_reached",
+                    epoch=0,
+                    best_epoch=0,
+                    best_score=88.0,
+                    epochs_completed=1,
+                ).to_row(),
+            )
+            selection = self.module.append_candidate_selection(args, paths)
+            manifest = json.loads(paths.candidate_manifest.read_text(encoding="utf-8"))
+            self.assertTrue(selection.limited)
+            self.assertEqual(manifest["status"], "limited")
+            self.assertEqual(manifest["candidate_floor"], 3)
+            self.assertEqual(manifest["limited_reasons"], ["candidate_count_below_floor"])
+            self.assertEqual(manifest["stop_summary"]["reason"], "max_epochs_reached")
 
     def test_candidate_selection_limited_when_no_viable_checkpoint_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -630,6 +915,7 @@ class TrainVoiceCandidatesContractTests(unittest.TestCase):
             self.assertTrue(selection.limited)
             self.assertEqual(selection.selected_epochs, ())
             self.assertEqual(manifest["status"], "limited")
+            self.assertEqual(manifest["limited_reasons"], ["candidate_count_below_floor"])
             self.assertEqual(manifest["candidates"], [])
             self.assertEqual([row["epoch"] for row in manifest["rejected_checkpoints"]], [0])
 

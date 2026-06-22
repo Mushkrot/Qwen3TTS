@@ -195,13 +195,17 @@ python tools/train_voice_candidates.py \
   --train_raw_jsonl datasets/voices/Baritone/Ready/<run_name>/manifests/train_raw.jsonl \
   --output_root experiments/qwen3_ru_en_speaker_v1/runs \
   --run_name baritone_sft_candidates_001 \
-  --max_epochs 1 \
+  --min_epochs 2 \
+  --max_epochs 6 \
+  --patience 2 \
+  --top_candidates 4 \
   --speaker_name speaker_target
 ```
 
 Real mode is GPU-heavy. It runs `scripts/run_prepare_data.sh`, then one
 `NUM_EPOCHS=1` training job per requested epoch through `scripts/run_sft_0_6b.sh`,
-then `scripts/run_infer_sample.py` once for each default eval phrase.
+then `scripts/run_infer_sample.py` once for each default eval phrase. The
+orchestrator evaluates each checkpoint before deciding whether to continue.
 
 Safe smoke mode does not load Qwen, Torch, or soundfile. It writes sentinel
 artifacts under `/tmp/qwen3tts_train_voice_candidates_smoke`:
@@ -216,17 +220,26 @@ Expected smoke artifacts:
 - `metrics.jsonl`
 - `candidate_manifest.json`
 - `train/epoch-0/checkpoint-epoch-0/STUB_CHECKPOINT.txt`
-- `eval/epoch-0/{01_en_short.wav,02_en_long.wav,03_en_calm.wav,04_ru_short.wav,05_ru_long.wav}`
+- `eval/epoch-N/{01_en_short.wav,02_en_long.wav,03_en_calm.wav,04_ru_short.wav,05_ru_long.wav}`
 
-The smoke also verifies automatic Stage 4/5 rows in `metrics.jsonl`:
+The smoke also verifies automatic metric, gate, and stopping rows in
+`metrics.jsonl`:
 
-- five `sample_metrics` rows, one per eval phrase;
+- five `sample_metrics` rows per completed epoch, one per eval phrase;
 - one `checkpoint_score` row per checkpoint;
 - numeric `score`, `sample_count`, `metric_summary`, and `warnings`.
 - one `checkpoint_gate` row per checkpoint;
+- one `early_stop_decision` row per completed epoch;
+- one final `run_stop` row;
 - one `candidate_selection` row after the epoch loop;
-- a parseable `candidate_manifest.json` whose `candidates` do not include any
-  hard-rejected checkpoint epoch.
+- a parseable `candidate_manifest.json` with `candidate_floor`,
+  `stop_summary`, and no hard-rejected checkpoint epoch in `candidates`.
+
+Default semi-auto stopping values are `min_epochs=2`, `max_epochs=6`,
+`patience=2`, `top_candidates=4`, and `candidate_floor=3`. The smoke should
+complete more than one stub epoch and stop before `max_epochs=6`. It prints the
+stop reason, epochs completed, selected candidate count, and rejected
+checkpoint count.
 
 Always-computed audio metrics are `duration_ratio`, `pace_chars_per_sec`,
 `pace_words_per_sec`, `rms_dbfs`, `clipping_ratio`, `leading_silence_ms`, and
@@ -263,6 +276,21 @@ Hard reject reasons currently emitted by the orchestrator:
 Rejected checkpoints stay auditable in `metrics.jsonl` and
 `candidate_manifest.json.rejected_checkpoints`, but they are excluded from
 `candidate_manifest.json.candidates`.
+
+Current stop reasons:
+
+- `min_epochs_pending`: continue until the minimum epoch floor is reached;
+- `patience_exhausted`: stop after the configured patience window has no score
+  improvement;
+- `quality_degradation`: stop when a hard-rejected checkpoint indicates quality
+  degradation after `min_epochs`;
+- `max_epochs_reached`: stop at the configured epoch cap;
+- hard failure: prepare/train/eval command failures abort the run and write a
+  `failure` row.
+
+Naturalness is currently represented by proxy metrics and hard gates. The
+system narrows the run without owner listening after every epoch; the owner
+still selects the final voice from the top candidates.
 
 ## Quick inference
 

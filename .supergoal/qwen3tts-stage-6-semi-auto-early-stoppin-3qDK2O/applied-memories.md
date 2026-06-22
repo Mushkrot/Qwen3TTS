@@ -1,0 +1,3 @@
+- Qwen3TTS workspace memory: preserve `datasets/voices/<Voice>/{Input,Ready}` and never commit raw `Input` audio; plan keeps all generated training artifacts ignored.
+- Qwen3TTS built-in dataset builder memory: this repo already owns raw-audio-to-dataset and training helper scripts; plan extends `tools/train_voice_candidates.py` instead of inventing a separate trainer.
+- Recallant context pack: Stage 5 hard-reject candidate manifest was the last planned checkpoint layer; Stage 6 should build on it by adding stopping decisions, not replacing gates or metrics.

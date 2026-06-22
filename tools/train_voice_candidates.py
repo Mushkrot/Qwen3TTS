@@ -31,12 +31,35 @@ METRIC_EVENT_SAMPLE = "sample_metrics"
 METRIC_EVENT_CHECKPOINT_SCORE = "checkpoint_score"
 METRIC_EVENT_CHECKPOINT_GATE = "checkpoint_gate"
 METRIC_EVENT_CANDIDATE_SELECTION = "candidate_selection"
+METRIC_EVENT_EARLY_STOP_DECISION = "early_stop_decision"
+METRIC_EVENT_RUN_STOP = "run_stop"
 PCM_SAMPLE_RATE = 16_000
 PCM_SILENCE_THRESHOLD = 500
 DEFAULT_TEXT_MATCH_MODEL = "large-v3"
 DEFAULT_TEXT_MATCH_DEVICE = "cuda"
 DEFAULT_TEXT_MATCH_COMPUTE_TYPE = "float16"
+DEFAULT_MIN_EPOCHS = 2
+DEFAULT_MAX_EPOCHS = 6
+DEFAULT_PATIENCE = 2
 DEFAULT_TOP_CANDIDATES = 4
+DEFAULT_CANDIDATE_FLOOR = 3
+DEFAULT_EARLY_STOP_MIN_DELTA = 0.0
+STOP_REASON_MIN_EPOCHS_PENDING = "min_epochs_pending"
+STOP_REASON_SCORE_IMPROVED = "score_improved"
+STOP_REASON_PATIENCE_PENDING = "patience_pending"
+STOP_REASON_PATIENCE_EXHAUSTED = "patience_exhausted"
+STOP_REASON_QUALITY_DEGRADATION = "quality_degradation"
+STOP_REASON_MAX_EPOCHS_REACHED = "max_epochs_reached"
+STOP_REASON_NO_VIABLE_CHECKPOINT = "no_viable_checkpoint"
+QUALITY_DEGRADATION_REJECT_REASONS: tuple[str, ...] = (
+    "asr_text_mismatch",
+    "audio_clipping",
+    "duration_too_short",
+    "duration_too_long",
+    "pace_accelerated",
+    "score_drop",
+    "suspected_cut",
+)
 _TEXT_MATCH_MODELS: dict[tuple[str, str, str], object] = {}
 
 
@@ -83,10 +106,21 @@ class HardRejectThresholds:
     score_drop_max: float = 18.0
 
 
+@dataclass(frozen=True)
+class EarlyStopPolicy:
+    min_epochs: int = DEFAULT_MIN_EPOCHS
+    max_epochs: int = DEFAULT_MAX_EPOCHS
+    patience: int = DEFAULT_PATIENCE
+    min_delta: float = DEFAULT_EARLY_STOP_MIN_DELTA
+    candidate_floor: int = DEFAULT_CANDIDATE_FLOOR
+    top_candidates: int = DEFAULT_TOP_CANDIDATES
+
+
 DEFAULT_METRIC_THRESHOLDS = MetricThresholds()
 DEFAULT_METRIC_WEIGHTS = MetricWeights()
 DEFAULT_METRIC_BACKENDS = MetricBackends()
 DEFAULT_HARD_REJECT_THRESHOLDS = HardRejectThresholds()
+DEFAULT_EARLY_STOP_POLICY = EarlyStopPolicy()
 
 
 @dataclass(frozen=True)
@@ -288,6 +322,48 @@ class CandidateSelection:
         }
 
 
+@dataclass(frozen=True)
+class EarlyStopDecision:
+    epoch: int
+    should_stop: bool
+    reason: str
+    best_epoch: int | None
+    best_score: float | None
+    epochs_without_improvement: int
+    min_epochs_reached: bool
+
+    def to_row(self) -> dict[str, object]:
+        return {
+            "event": METRIC_EVENT_EARLY_STOP_DECISION,
+            "epoch": self.epoch,
+            "should_stop": self.should_stop,
+            "reason": self.reason,
+            "best_epoch": self.best_epoch,
+            "best_score": self.best_score,
+            "epochs_without_improvement": self.epochs_without_improvement,
+            "min_epochs_reached": self.min_epochs_reached,
+        }
+
+
+@dataclass(frozen=True)
+class RunStop:
+    reason: str
+    epoch: int
+    best_epoch: int | None
+    best_score: float | None
+    epochs_completed: int
+
+    def to_row(self) -> dict[str, object]:
+        return {
+            "event": METRIC_EVENT_RUN_STOP,
+            "reason": self.reason,
+            "epoch": self.epoch,
+            "best_epoch": self.best_epoch,
+            "best_score": self.best_score,
+            "epochs_completed": self.epochs_completed,
+        }
+
+
 class OrchestrationError(RuntimeError):
     """Raised when a mandatory orchestration step fails."""
 
@@ -379,6 +455,21 @@ def hard_reject_thresholds_from_args(args: argparse.Namespace) -> HardRejectThre
         suspected_cut_duration_ratio_max=args.hard_reject_suspected_cut_duration_ratio_max,
         suspected_cut_trailing_silence_ms_max=args.hard_reject_suspected_cut_trailing_silence_ms_max,
         score_drop_max=args.hard_reject_score_drop_max,
+    )
+
+
+def early_stop_policy_row(policy: EarlyStopPolicy = DEFAULT_EARLY_STOP_POLICY) -> dict[str, object]:
+    return asdict(policy)
+
+
+def early_stop_policy_from_args(args: argparse.Namespace) -> EarlyStopPolicy:
+    return EarlyStopPolicy(
+        min_epochs=args.min_epochs,
+        max_epochs=args.max_epochs,
+        patience=args.patience,
+        min_delta=args.early_stop_min_delta,
+        candidate_floor=args.candidate_floor,
+        top_candidates=args.top_candidates,
     )
 
 
@@ -904,6 +995,123 @@ def append_checkpoint_gate(
     return gate
 
 
+def best_viable_gate_state(
+    gate_rows: Sequence[dict[str, object]],
+    min_delta: float,
+) -> tuple[int | None, float | None, int]:
+    best_epoch: int | None = None
+    best_score: float | None = None
+    epochs_without_improvement = 0
+    for row in gate_rows:
+        if row.get("hard_rejected") is not False:
+            continue
+        score = numeric(row.get("score"))
+        if score is None:
+            continue
+        epoch = int(row["epoch"]) if isinstance(row.get("epoch"), int) else None
+        if best_score is None or score > best_score + min_delta:
+            best_score = score
+            best_epoch = epoch
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+    return best_epoch, rounded(best_score, 4) if best_score is not None else None, epochs_without_improvement
+
+
+def gate_has_quality_degradation(row: dict[str, object]) -> bool:
+    reject_reasons = row.get("reject_reasons", [])
+    if not isinstance(reject_reasons, list):
+        return False
+    return any(str(reason) in QUALITY_DEGRADATION_REJECT_REASONS for reason in reject_reasons)
+
+
+def evaluate_early_stop_decision(
+    args: argparse.Namespace,
+    paths: RunPaths,
+    current_gate: CheckpointGate | dict[str, object] | None = None,
+) -> EarlyStopDecision:
+    policy = early_stop_policy_from_args(args)
+    gate_rows = sorted_gate_rows(paths)
+    if current_gate is None:
+        if not gate_rows:
+            return EarlyStopDecision(
+                epoch=-1,
+                should_stop=False,
+                reason=STOP_REASON_NO_VIABLE_CHECKPOINT,
+                best_epoch=None,
+                best_score=None,
+                epochs_without_improvement=0,
+                min_epochs_reached=False,
+            )
+        current_row = gate_rows[-1]
+    elif isinstance(current_gate, CheckpointGate):
+        current_row = current_gate.to_row()
+    else:
+        current_row = current_gate
+    current_epoch = int(current_row["epoch"]) if isinstance(current_row.get("epoch"), int) else 0
+    completed_epochs = current_epoch + 1
+    min_epochs_reached = completed_epochs >= policy.min_epochs
+    best_epoch, best_score, epochs_without_improvement = best_viable_gate_state(
+        gate_rows,
+        policy.min_delta,
+    )
+
+    should_stop = False
+    if not min_epochs_reached:
+        reason = STOP_REASON_MIN_EPOCHS_PENDING
+    elif current_row.get("hard_rejected") is True and gate_has_quality_degradation(current_row):
+        should_stop = True
+        reason = STOP_REASON_QUALITY_DEGRADATION
+    elif best_epoch is not None and epochs_without_improvement >= policy.patience:
+        should_stop = True
+        reason = STOP_REASON_PATIENCE_EXHAUSTED
+    elif completed_epochs >= policy.max_epochs:
+        should_stop = True
+        reason = STOP_REASON_MAX_EPOCHS_REACHED
+    elif best_epoch is None:
+        reason = STOP_REASON_NO_VIABLE_CHECKPOINT
+    elif epochs_without_improvement > 0:
+        reason = STOP_REASON_PATIENCE_PENDING
+    else:
+        reason = STOP_REASON_SCORE_IMPROVED
+
+    return EarlyStopDecision(
+        epoch=current_epoch,
+        should_stop=should_stop,
+        reason=reason,
+        best_epoch=best_epoch,
+        best_score=best_score,
+        epochs_without_improvement=epochs_without_improvement,
+        min_epochs_reached=min_epochs_reached,
+    )
+
+
+def append_early_stop_decision(
+    args: argparse.Namespace,
+    paths: RunPaths,
+    current_gate: CheckpointGate,
+) -> EarlyStopDecision:
+    decision = evaluate_early_stop_decision(args, paths, current_gate)
+    append_metrics(paths.metrics_jsonl, **decision.to_row())
+    return decision
+
+
+def run_stop_from_decision(decision: EarlyStopDecision) -> RunStop:
+    return RunStop(
+        reason=decision.reason,
+        epoch=decision.epoch,
+        best_epoch=decision.best_epoch,
+        best_score=decision.best_score,
+        epochs_completed=max(0, decision.epoch + 1),
+    )
+
+
+def append_run_stop(paths: RunPaths, decision: EarlyStopDecision) -> RunStop:
+    stop = run_stop_from_decision(decision)
+    append_metrics(paths.metrics_jsonl, **stop.to_row())
+    return stop
+
+
 def sorted_gate_rows(paths: RunPaths) -> list[dict[str, object]]:
     rows = event_rows(paths.metrics_jsonl, METRIC_EVENT_CHECKPOINT_GATE)
     return sorted(
@@ -955,6 +1163,24 @@ def select_candidate_rows(args: argparse.Namespace, paths: RunPaths) -> tuple[li
     return selected, rejected
 
 
+def latest_event_row(paths: RunPaths, event_name: str) -> dict[str, object] | None:
+    rows = event_rows(paths.metrics_jsonl, event_name)
+    return rows[-1] if rows else None
+
+
+def stop_summary_from_metrics(paths: RunPaths) -> dict[str, object] | None:
+    row = latest_event_row(paths, METRIC_EVENT_RUN_STOP)
+    if row is None:
+        return None
+    return {
+        "reason": row.get("reason"),
+        "epoch": row.get("epoch"),
+        "best_epoch": row.get("best_epoch"),
+        "best_score": row.get("best_score"),
+        "epochs_completed": row.get("epochs_completed"),
+    }
+
+
 def write_candidate_manifest(
     args: argparse.Namespace,
     paths: RunPaths,
@@ -966,14 +1192,20 @@ def write_candidate_manifest(
         for index, row in enumerate(selected_rows, start=1)
     ]
     rejected = [candidate_entry_from_gate(row) for row in rejected_rows]
+    limited_reasons: list[str] = []
+    if len(candidates) < args.candidate_floor:
+        limited_reasons.append("candidate_count_below_floor")
     manifest: dict[str, object] = {
         "generated_at": utc_now(),
         "voice_name": args.voice_name,
         "run_name": args.run_name,
-        "status": "limited" if not candidates else "ok",
+        "status": "limited" if limited_reasons else "ok",
         "top_candidates": args.top_candidates,
+        "candidate_floor": args.candidate_floor,
         "candidate_count": len(candidates),
         "rejected_count": len(rejected),
+        "limited_reasons": limited_reasons,
+        "stop_summary": stop_summary_from_metrics(paths),
         "candidates": candidates,
         "rejected_checkpoints": rejected,
     }
@@ -1312,6 +1544,7 @@ def generate_eval_pack(args: argparse.Namespace, paths: RunPaths, epoch: int, ch
 def orchestrate(args: argparse.Namespace) -> RunPaths:
     paths = build_paths(args.output_root, args.voice_name, args.run_name)
     ensure_run_dirs(paths)
+    last_stop_decision: EarlyStopDecision | None = None
     append_metrics(
         paths.metrics_jsonl,
         event="run_start",
@@ -1321,6 +1554,8 @@ def orchestrate(args: argparse.Namespace) -> RunPaths:
         output_root=str(args.output_root),
         run_name=args.run_name,
         max_epochs=args.max_epochs,
+        min_epochs=args.min_epochs,
+        patience=args.patience,
         base_model=args.base_model,
         execution_mode=args.execution_mode,
     )
@@ -1330,7 +1565,22 @@ def orchestrate(args: argparse.Namespace) -> RunPaths:
             checkpoint = run_train_epoch(args, paths, epoch)
             generate_eval_pack(args, paths, epoch, checkpoint)
             checkpoint_score = append_checkpoint_score(paths, epoch, checkpoint)
-            append_checkpoint_gate(args, paths, checkpoint_score)
+            checkpoint_gate = append_checkpoint_gate(args, paths, checkpoint_score)
+            last_stop_decision = append_early_stop_decision(args, paths, checkpoint_gate)
+            if last_stop_decision.should_stop:
+                break
+        if last_stop_decision is not None:
+            if not last_stop_decision.should_stop:
+                last_stop_decision = EarlyStopDecision(
+                    epoch=last_stop_decision.epoch,
+                    should_stop=True,
+                    reason=STOP_REASON_MAX_EPOCHS_REACHED,
+                    best_epoch=last_stop_decision.best_epoch,
+                    best_score=last_stop_decision.best_score,
+                    epochs_without_improvement=last_stop_decision.epochs_without_improvement,
+                    min_epochs_reached=last_stop_decision.min_epochs_reached,
+                )
+            append_run_stop(paths, last_stop_decision)
         append_candidate_selection(args, paths)
     except Exception as exc:
         append_metrics(
@@ -1365,8 +1615,37 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--train_raw_jsonl", type=Path, required=True, help="Ready dataset train_raw.jsonl")
     parser.add_argument("--output_root", type=Path, required=True, help="Root directory for this training run")
     parser.add_argument("--run_name", default=DEFAULT_RUN_NAME, help="Deterministic run name under the voice")
-    parser.add_argument("--max_epochs", type=int, default=1, help="Number of one-epoch jobs to run")
+    parser.add_argument(
+        "--min_epochs",
+        type=int,
+        default=DEFAULT_MIN_EPOCHS,
+        help="Minimum completed epochs before semi-auto early stopping may stop training.",
+    )
+    parser.add_argument(
+        "--max_epochs",
+        type=int,
+        default=DEFAULT_MAX_EPOCHS,
+        help="Maximum one-epoch jobs to run before stopping.",
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=DEFAULT_PATIENCE,
+        help="Stop after this many viable epochs without score improvement.",
+    )
+    parser.add_argument(
+        "--early_stop_min_delta",
+        type=float,
+        default=DEFAULT_EARLY_STOP_MIN_DELTA,
+        help="Minimum score increase required to count as an improvement.",
+    )
     parser.add_argument("--top_candidates", type=int, default=DEFAULT_TOP_CANDIDATES, help="Maximum final candidates")
+    parser.add_argument(
+        "--candidate_floor",
+        type=int,
+        default=DEFAULT_CANDIDATE_FLOOR,
+        help="Minimum viable candidates expected before the manifest is no longer limited.",
+    )
     parser.add_argument("--speaker_name", default="speaker_target", help="Speaker name passed to SFT/inference")
     parser.add_argument("--base_model", default=DEFAULT_BASE_MODEL, help="Initial model for epoch 0")
     parser.add_argument("--tokenizer_model_path", default=DEFAULT_TOKENIZER_MODEL)
@@ -1490,11 +1769,25 @@ def args_to_jsonable(args: argparse.Namespace) -> dict[str, object]:
     return result
 
 
+def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    if args.min_epochs < 1:
+        parser.error("--min_epochs must be >= 1")
+    if args.max_epochs < 1:
+        parser.error("--max_epochs must be >= 1")
+    if args.patience < 1:
+        parser.error("--patience must be >= 1")
+    if args.top_candidates < 1:
+        parser.error("--top_candidates must be >= 1")
+    if args.candidate_floor < 1:
+        parser.error("--candidate_floor must be >= 1")
+    if args.min_epochs > args.max_epochs:
+        parser.error("--min_epochs must be <= --max_epochs")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = create_parser()
     args = parser.parse_args(argv)
-    if args.max_epochs < 1:
-        parser.error("--max_epochs must be >= 1")
+    validate_args(args, parser)
     try:
         paths = orchestrate(args)
     except OrchestrationError as exc:
@@ -1506,19 +1799,36 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 __all__ = [
     "DEFAULT_EVAL_PHRASES",
+    "DEFAULT_EARLY_STOP_MIN_DELTA",
+    "DEFAULT_CANDIDATE_FLOOR",
+    "DEFAULT_EARLY_STOP_POLICY",
     "DEFAULT_METRIC_BACKENDS",
     "DEFAULT_HARD_REJECT_THRESHOLDS",
+    "DEFAULT_MAX_EPOCHS",
     "DEFAULT_METRIC_THRESHOLDS",
     "DEFAULT_METRIC_WEIGHTS",
+    "DEFAULT_MIN_EPOCHS",
+    "DEFAULT_PATIENCE",
     "DEFAULT_TOP_CANDIDATES",
+    "QUALITY_DEGRADATION_REJECT_REASONS",
+    "STOP_REASON_MAX_EPOCHS_REACHED",
+    "STOP_REASON_MIN_EPOCHS_PENDING",
+    "STOP_REASON_NO_VIABLE_CHECKPOINT",
+    "STOP_REASON_PATIENCE_EXHAUSTED",
+    "STOP_REASON_PATIENCE_PENDING",
+    "STOP_REASON_QUALITY_DEGRADATION",
+    "STOP_REASON_SCORE_IMPROVED",
     "EvalPhrase",
     "CandidateSelection",
     "CheckpointGate",
+    "EarlyStopDecision",
+    "EarlyStopPolicy",
     "MetricBackends",
     "HardRejectThresholds",
     "MetricThresholds",
     "MetricWeights",
     "RunPaths",
+    "RunStop",
     "SampleMetrics",
     "CheckpointScore",
     "build_infer_command",
@@ -1527,24 +1837,35 @@ __all__ = [
     "build_train_command",
     "clamp_score",
     "append_candidate_selection",
+    "append_early_stop_decision",
     "append_checkpoint_gate",
+    "append_run_stop",
+    "best_viable_gate_state",
     "candidate_entry_from_gate",
     "compute_sample_metrics",
     "create_parser",
+    "evaluate_early_stop_decision",
     "evaluate_checkpoint_gate",
     "estimate_expected_duration_seconds",
+    "early_stop_policy_row",
+    "early_stop_policy_from_args",
     "faster_whisper_text_match",
     "hard_reject_thresholds_row",
     "hard_reject_thresholds_from_args",
     "loss_summary_for_epoch",
+    "latest_event_row",
     "metric_thresholds_row",
     "metric_weights_row",
     "orchestrate",
     "parse_loss_values",
     "read_metrics",
+    "run_stop_from_decision",
     "resolve_backend_mode",
+    "gate_has_quality_degradation",
+    "stop_summary_from_metrics",
     "text_match_for_phrase",
     "text_match_ratio",
+    "validate_args",
     "write_stub_wav",
 ]
 
