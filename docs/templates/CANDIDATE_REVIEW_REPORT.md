@@ -5,7 +5,8 @@ Use this template for Qwen3-TTS checkpoint candidate review after a training run
 Generated WAV files, checkpoints, metrics, and candidate manifests referenced by
 this report are working artifacts. Do not commit generated WAVs, generated
 checkpoints, generated `metrics.jsonl`, generated `candidate_manifest.json`,
-raw source audio, or processed dataset chunks.
+generated `candidate_review/` packs, raw source audio, or processed dataset
+chunks.
 
 ## Run Metadata
 
@@ -16,6 +17,11 @@ raw source audio, or processed dataset chunks.
 - Manifest path:
 - Prepared manifest path:
 - Candidate manifest path:
+- Candidate review directory:
+- Ranking path:
+- Copied metrics path:
+- Selected checkpoint JSON:
+- Experiment status path:
 - Base model:
 - Speaker name:
 - Training command summary:
@@ -47,6 +53,11 @@ raw source audio, or processed dataset chunks.
 | 3 | candidate_C_epochN | `runs/.../checkpoint-epoch-N` |  | pass / limited / reject |  | `samples/.../candidate_C_epochN/` |
 | 4 | candidate_D_epochN | `runs/.../checkpoint-epoch-N` |  | pass / limited / reject |  | `samples/.../candidate_D_epochN/` |
 
+Use the generated `candidate_review/ranking.md` as the quick listening guide.
+It should list each exported candidate folder, checkpoint path, score,
+selection reason, risks/warnings, and the audio files to listen to. The owner
+should listen only to these exported candidates, not every epoch in the run.
+
 ## Early Stop Summary
 
 Copy these values from `candidate_manifest.json.stop_summary` and the top-level
@@ -66,8 +77,14 @@ manifest fields.
 
 The early-stop logic narrows the run so the owner does not need to listen after
 every epoch. The final winner below is still human-selected from the top
-candidates. Copied candidate WAV export and selected-checkpoint persistence are
-not part of the current automated flow unless a later run explicitly adds them.
+candidates. After listening, record the winner with:
+
+```bash
+python tools/select_voice_candidate.py --candidate B --candidate_review_dir <candidate_review_dir>
+```
+
+The command writes small metadata only: `selected_checkpoint.json`,
+`experiment_status.json`, and `candidate_manifest.json.winner_selection`.
 
 ## Automatic Metrics Summary
 
@@ -151,6 +168,9 @@ Score each item from 1 to 5 and keep short notes. Use the same generated phrase 
 - Selected candidate:
 - Selected checkpoint:
 - Selected sample path:
+- Selection command:
+- Selected checkpoint JSON:
+- Experiment status path:
 - Reason for choice:
 - Trade-offs accepted:
 - Follow-up action:
@@ -164,7 +184,9 @@ Do not commit:
 - processed chunks under `datasets/voices/**/Ready/`;
 - generated checkpoints under `experiments/**/runs/`;
 - generated WAV samples under `experiments/**/samples/`.
+- generated candidate review packs under `experiments/**/samples/**/candidate_review/`;
 - generated `metrics.jsonl` and `candidate_manifest.json` files under run
   directories.
 
-Commit only this filled report if it contains no private source paths, no secrets, and no large generated data.
+Commit only this filled report and any intentional small selection metadata if
+they contain no private source paths, no secrets, and no large generated data.

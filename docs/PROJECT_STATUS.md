@@ -26,10 +26,13 @@ Reference docs:
 - Training policy: use the documented semi-automatic candidate review protocol in
   `docs/CHECKPOINT_SELECTION_PROTOCOL.md`; project-local orchestration now
   supports epoch-by-epoch checkpoints, eval packs, automatic metrics,
-  hard-reject gates, semi-auto early stopping, and candidate manifests. Default
-  stopping values are `min_epochs=2`, `max_epochs=6`, `patience=2`, and
-  `top_candidates=4`. Copied candidate WAV export and selected-checkpoint
-  persistence are not implemented yet; the final winner remains human-selected.
+  hard-reject gates, semi-auto early stopping, candidate manifests, and
+  exported candidate review packs. Default stopping values are `min_epochs=2`,
+  `max_epochs=6`, `patience=2`, and `top_candidates=4`. The review pack copies
+  selected eval WAVs, `ranking.md`, and `metrics.jsonl`; the owner then records
+  the human winner with `tools/select_voice_candidate.py`, which writes
+  `selected_checkpoint.json`, `experiment_status.json`, and
+  `winner_selection` metadata without copying checkpoints or audio.
 - Raw source audio in `datasets/voices/**/Input/` is never committed.
 - Commit code, docs, scaffolds, small config, and reproducible patches only.
 
@@ -56,6 +59,15 @@ Reference docs:
 - Default local smoke passes:
   - `bash scripts/run_voice_filter_smoke.sh`
   - current fallback uses local Baritone input and runs filter-only smoke unless full ASR is explicitly required.
+- Training candidate and winner-selection smokes pass:
+  - `bash scripts/run_train_voice_candidates_smoke.sh`
+  - `bash scripts/run_select_voice_candidate_smoke.sh`
+  - the selection smoke chooses `candidate_B_epoch1`, verifies status metadata,
+    and verifies no checkpoint/WAV/metrics copy is created by selection.
+- Deployment status: this repository has no long-running service or public
+  deployment target for the current stage. The deploy/release gate is a
+  verified local workflow snapshot: docs, tests, smoke checks, artifact hygiene,
+  and a Git commit preserving the current implementation.
 
 ### Not restored / not ready
 

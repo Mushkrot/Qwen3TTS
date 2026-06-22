@@ -18,9 +18,14 @@ after each checkpoint. Stage 4 adds automatic `sample_metrics` and
 `checkpoint_gate` hard-reject rows plus `candidate_selection` metadata and a
 `candidate_manifest.json` that excludes hard-rejected checkpoints from the
 review set. Stage 6 implements project-local semi-auto early stopping with
-`early_stop_decision` and `run_stop` rows. This still does not claim that
-upstream Qwen3-TTS has native optimal stopping, and it does not yet copy/export
-final candidate WAV packs or persist the owner-selected checkpoint.
+`early_stop_decision` and `run_stop` rows. Stage 7 exports the selected
+candidates into a candidate review pack with copied eval WAVs, `ranking.md`,
+and a copied `metrics.jsonl`, and appends a `candidate_review_export` row to
+the run metrics. Stage 8/9 adds `tools/select_voice_candidate.py` so the owner
+can persist the human-selected winner as `selected_checkpoint.json`, local
+experiment status, and a `candidate_manifest.json.winner_selection` block. This
+still does not claim that upstream Qwen3-TTS has native optimal stopping, and
+it still leaves the final voice choice to the owner.
 
 ## Scope
 
@@ -52,9 +57,11 @@ For Baritone-style audiobook sources, use the current conservative build policy 
 
 ## Fixed Evaluation Phrases
 
-Use `docs/EVAL_PHRASE_SET.md` as the canonical phrase source. For the current product goal, the five fixed English phrases in that document are primary and must be generated for every candidate checkpoint under review.
-
-Optional Russian sanity phrases may be added in a later protocol revision, but they must be secondary: they can detect identity or voice stability regressions, but they must not replace the English phrase set or override the English product objective.
+Use `docs/EVAL_PHRASE_SET.md` and `tools/train_voice_candidates.py` as the
+canonical phrase sources. The current fixed eval pack contains three English
+phrases and two Russian sanity phrases, all generated for every checkpoint
+under review. English generation remains the primary product objective; Russian
+phrases help catch identity or stability regressions.
 
 ## Candidate Artifacts
 
@@ -63,8 +70,10 @@ ignored working paths. For candidate-review exports, keep this shape:
 
 ```text
 experiments/qwen3_ru_en_speaker_v1/
-  runs/<run_name>/checkpoint-epoch-N/
-  samples/<run_name>/candidate_review/
+  runs/<voice_name>/<run_name>/
+    candidate_manifest.json
+    metrics.jsonl
+  samples/<voice_name>/<run_name>/candidate_review/
     candidate_A_epoch0/
     candidate_B_epoch1/
     candidate_C_epoch2/
@@ -75,8 +84,12 @@ experiments/qwen3_ru_en_speaker_v1/
 
 Generated metric JSONL files, WAV files, model checkpoints, command logs, and
 dataset chunks are working artifacts and must not be committed. Generated
-`candidate_manifest.json` files are run artifacts too: keep them in ignored run
-directories unless a small sanitized metadata snapshot is deliberately promoted.
+`candidate_manifest.json` files and candidate review packs are run artifacts
+too: keep them in ignored run/sample directories unless a small sanitized
+metadata snapshot is deliberately promoted.
+Small winner-selection metadata may be preserved intentionally when it is the
+durable record of the chosen voice. It must not duplicate checkpoints, WAVs,
+copied metrics, or raw source audio.
 Raw audio in voice `Input/` folders is also not a commit target. Commit only
 docs, code, tests, small templates, small reproducible metadata, and scaffolds.
 
@@ -163,10 +176,9 @@ After hard gates, rank remaining checkpoints with a weighted score. Initial weig
 In the current implementation, unavailable `speaker_similarity` adds
 a warning and a small score penalty while keeping the checkpoint score numeric.
 The candidate selector ranks only non-rejected checkpoints, with up to
-`--top_candidates` entries written to `candidate_manifest.json`. A later copied
-audio export stage may redistribute optional metric weight across
-pace/duration stability, onset/offset quality, and text match, and should record
-that policy in `metrics.jsonl` or the review report when it is implemented.
+`--top_candidates` entries written to `candidate_manifest.json` and exported to
+the candidate review pack. Future metric-weight changes should record the
+policy in `metrics.jsonl`, `candidate_manifest.json`, or the review report.
 
 Tie break order:
 
@@ -221,9 +233,11 @@ If fewer than `candidate_floor` viable candidates exist when the loop stops,
 
 ## Candidate Export
 
-The current implementation writes candidate metadata only. A later export layer
-should copy at most `top_candidates` candidates into a review pack. Candidate
-labels must not imply ranking certainty beyond the report:
+Stage 7 exports at most `top_candidates` selected candidates into a review pack.
+Only `candidate_manifest.json.candidates` are copied; rejected checkpoints stay
+auditable in `candidate_manifest.json.rejected_checkpoints` and are not copied.
+Candidate labels are rank labels for review convenience, not a final voice
+decision:
 
 ```text
 candidate_A_epoch0/
@@ -232,7 +246,34 @@ candidate_C_epoch2/
 candidate_D_epoch3/
 ```
 
-Each candidate folder should contain the same generated eval phrase files with stable names from `docs/EVAL_PHRASE_SET.md`.
+Each candidate folder contains the same generated eval phrase files with stable
+names from `docs/EVAL_PHRASE_SET.md`. The review root defaults to:
+
+```text
+<output_root_parent>/samples/<voice_name>/<run_name>/candidate_review/
+```
+
+when `--output_root` is named `runs`, such as
+`experiments/qwen3_ru_en_speaker_v1/runs`. For smoke/temp roots whose
+`--output_root` is not named `runs`, the default is
+`<run_dir>/candidate_review/`. Override either default with
+`--candidate_review_root`.
+
+The review pack contains:
+
+- `candidate_A_epochN/` through `candidate_D_epochN/`, up to
+  `--top_candidates`;
+- the fixed eval WAV files under each candidate folder;
+- `ranking.md` with rank, epoch, checkpoint path, score, selection reason,
+  risks/warnings, and audio files to listen to;
+- copied `metrics.jsonl`, kept byte-identical to the run metrics after
+  `run_end`.
+
+The orchestrator also records `candidate_review` metadata in
+`candidate_manifest.json`: review directory, ranking path, metrics copy path,
+exported candidate count, exported epochs, and candidate directories. The same
+review-pack summary is appended as a `candidate_review_export` row in
+`metrics.jsonl` before the final copied metrics file is synchronized.
 
 The report must include:
 
@@ -255,24 +296,47 @@ Use `docs/templates/CANDIDATE_REVIEW_REPORT.md` as the human-facing report templ
 ## Human Selection Gate
 
 The user should listen only to the 3-4 candidates selected by
-`candidate_manifest.json`, not every epoch. Semi-auto stopping decides when the
-run has enough evidence to stop; it does not choose the final voice. After a
-later export layer exists, those selected checkpoints can be copied into a
-review pack. The selected candidate becomes the active voice candidate only
-after the user records the final choice in the review report or a future
-`selected_checkpoint.json`.
+`candidate_manifest.json` and exported under `candidate_review/`, not every
+epoch. Semi-auto stopping decides when the run has enough evidence to stop; it
+does not choose the final voice. The selected candidate becomes the active voice
+candidate only after the user records the final choice:
+
+```bash
+python tools/select_voice_candidate.py \
+  --candidate B \
+  --candidate_review_dir experiments/qwen3_ru_en_speaker_v1/samples/<voice_name>/<run_name>/candidate_review
+```
+
+The selector accepts `A`, `B`, a numeric rank such as `2`, or a full label such
+as `candidate_B_epoch1`. It reads only `candidate_manifest.json.candidates`;
+checkpoints that exist only in `candidate_manifest.json.rejected_checkpoints`
+are rejected. On success it writes:
+
+- `selected_checkpoint.json` with candidate label/rank/epoch, score,
+  checkpoint path, review dir, and source manifest path;
+- `experiment_status.json` with `active_checkpoint` and `primary_checkpoint`;
+- `candidate_manifest.json.winner_selection`.
+
+For normal experiment layouts, `selected_checkpoint.json` is written at
+`experiments/<experiment>/selected_checkpoint.json`. For temp/smoke layouts, it
+is written under the run directory. Selection writes small metadata only and
+does not copy checkpoint directories, generated WAVs, copied metrics, or raw
+audio.
 
 The report should preserve the reason for the choice because the best checkpoint may not be the highest automatic score when human naturalness, voice identity, or delivery feel differs from proxy metrics.
 
-## Implementation Notes For Later Stages
+## Current MVP And Later Improvements
 
-The current project-local orchestrator already runs training epoch by epoch,
-generates eval samples after each checkpoint, appends checkpoint/eval rows to
-`metrics.jsonl`, computes per-sample metrics, writes one numeric
-`checkpoint_score` row per checkpoint, writes `checkpoint_gate` hard-reject
-rows, appends `early_stop_decision` and `run_stop` rows, and writes
-`candidate_manifest.json` with only non-rejected candidates plus stop summary
-metadata. Later stages should add copied candidate audio export and
-selected-checkpoint persistence.
+The current MVP includes epoch-by-epoch training, fixed eval audio generation,
+simple automatic metrics, hard-reject gates, semi-auto early stopping, top-4
+candidate export, and human winner selection through
+`tools/select_voice_candidate.py`.
+
+Deferred improvements:
+
+- real speaker-similarity embedding backend;
+- smarter scoring and a better naturalness signal;
+- richer Markdown or HTML report generation;
+- automatic recommended-candidate logic for review assistance.
 
 Do not patch upstream `sft_12hz.py` to pretend it has built-in early stopping. Keep orchestration in project-local scripts so upstream behavior remains understandable and reproducible.

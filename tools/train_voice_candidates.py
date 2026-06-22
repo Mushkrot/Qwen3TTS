@@ -31,6 +31,7 @@ METRIC_EVENT_SAMPLE = "sample_metrics"
 METRIC_EVENT_CHECKPOINT_SCORE = "checkpoint_score"
 METRIC_EVENT_CHECKPOINT_GATE = "checkpoint_gate"
 METRIC_EVENT_CANDIDATE_SELECTION = "candidate_selection"
+METRIC_EVENT_CANDIDATE_REVIEW_EXPORT = "candidate_review_export"
 METRIC_EVENT_EARLY_STOP_DECISION = "early_stop_decision"
 METRIC_EVENT_RUN_STOP = "run_stop"
 PCM_SAMPLE_RATE = 16_000
@@ -44,6 +45,7 @@ DEFAULT_PATIENCE = 2
 DEFAULT_TOP_CANDIDATES = 4
 DEFAULT_CANDIDATE_FLOOR = 3
 DEFAULT_EARLY_STOP_MIN_DELTA = 0.0
+CANDIDATE_REVIEW_RANK_NAMES: tuple[str, ...] = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 STOP_REASON_MIN_EPOCHS_PENDING = "min_epochs_pending"
 STOP_REASON_SCORE_IMPROVED = "score_improved"
 STOP_REASON_PATIENCE_PENDING = "patience_pending"
@@ -323,6 +325,32 @@ class CandidateSelection:
 
 
 @dataclass(frozen=True)
+class CandidateReviewExport:
+    review_dir: str
+    ranking_path: str
+    metrics_path: str
+    candidate_count: int
+    exported_epochs: tuple[int, ...]
+    candidate_dirs: tuple[str, ...] = ()
+
+    def to_row(self) -> dict[str, object]:
+        return {
+            "event": METRIC_EVENT_CANDIDATE_REVIEW_EXPORT,
+            "review_dir": self.review_dir,
+            "ranking_path": self.ranking_path,
+            "metrics_path": self.metrics_path,
+            "candidate_count": self.candidate_count,
+            "exported_epochs": list(self.exported_epochs),
+            "candidate_dirs": list(self.candidate_dirs),
+        }
+
+    def to_manifest(self) -> dict[str, object]:
+        row = self.to_row()
+        row.pop("event", None)
+        return row
+
+
+@dataclass(frozen=True)
 class EarlyStopDecision:
     epoch: int
     should_stop: bool
@@ -388,6 +416,31 @@ def build_paths(output_root: Path, voice_name: str, run_name: str) -> RunPaths:
     )
 
 
+def candidate_review_rank_name(rank: int) -> str:
+    if rank < 1:
+        raise ValueError("candidate review rank must be >= 1")
+    if rank <= len(CANDIDATE_REVIEW_RANK_NAMES):
+        return CANDIDATE_REVIEW_RANK_NAMES[rank - 1]
+    return str(rank)
+
+
+def candidate_review_folder_name(rank: int, epoch: int) -> str:
+    return f"candidate_{candidate_review_rank_name(rank)}_epoch{epoch}"
+
+
+def default_candidate_review_root(args: argparse.Namespace, paths: RunPaths) -> Path:
+    output_root = Path(args.output_root)
+    if output_root.name == "runs":
+        return output_root.parent / "samples" / args.voice_name / args.run_name / "candidate_review"
+    return paths.run_dir / "candidate_review"
+
+
+def resolve_candidate_review_root(args: argparse.Namespace, paths: RunPaths) -> Path:
+    if args.candidate_review_root is not None:
+        return Path(args.candidate_review_root)
+    return default_candidate_review_root(args, paths)
+
+
 def ensure_run_dirs(paths: RunPaths) -> None:
     for path in (
         paths.run_dir,
@@ -400,10 +453,10 @@ def ensure_run_dirs(paths: RunPaths) -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
-def append_metrics(metrics_path: Path, **row: object) -> None:
-    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+def append_metrics(target_metrics_path: Path, **row: object) -> None:
+    target_metrics_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"ts": utc_now(), **row}
-    with metrics_path.open("a", encoding="utf-8") as handle:
+    with target_metrics_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
 
 
@@ -1143,7 +1196,7 @@ def candidate_entry_from_gate(row: dict[str, object], rank: int | None = None) -
     }
     if rank is not None:
         entry["rank"] = rank
-        entry["label"] = f"candidate_{rank:02d}_epoch{epoch}"
+        entry["label"] = candidate_review_folder_name(rank, epoch)
     return entry
 
 
@@ -1214,6 +1267,159 @@ def write_candidate_manifest(
         encoding="utf-8",
     )
     return manifest
+
+
+def load_candidate_manifest(paths: RunPaths) -> dict[str, object]:
+    if not paths.candidate_manifest.exists():
+        raise OrchestrationError(f"candidate manifest not found: {paths.candidate_manifest}")
+    manifest = json.loads(paths.candidate_manifest.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise OrchestrationError(f"candidate manifest is not an object: {paths.candidate_manifest}")
+    return manifest
+
+
+def candidate_list_from_manifest(manifest: dict[str, object]) -> list[dict[str, object]]:
+    candidates = manifest.get("candidates", [])
+    if not isinstance(candidates, list):
+        raise OrchestrationError("candidate_manifest.json candidates must be a list")
+    result: list[dict[str, object]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            raise OrchestrationError("candidate_manifest.json contains a non-object candidate")
+        result.append(candidate)
+    return result
+
+
+def list_candidate_eval_sources(candidate: dict[str, object]) -> list[Path]:
+    epoch = int(candidate["epoch"]) if isinstance(candidate.get("epoch"), int) else 0
+    eval_dir_raw = candidate.get("eval_dir")
+    if not eval_dir_raw:
+        raise OrchestrationError(f"candidate epoch {epoch} has no eval_dir")
+    eval_dir = Path(str(eval_dir_raw))
+    sources = [eval_dir / phrase.filename for phrase in DEFAULT_EVAL_PHRASES]
+    missing = [path for path in sources if not path.exists()]
+    if missing:
+        missing_text = ", ".join(str(path) for path in missing)
+        raise OrchestrationError(f"missing selected eval audio for epoch {epoch}: {missing_text}")
+    return sources
+
+
+def copy_candidate_review_metrics(paths: RunPaths, metrics_path: Path) -> None:
+    if not paths.metrics_jsonl.exists():
+        raise OrchestrationError(f"metrics jsonl not found: {paths.metrics_jsonl}")
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    if metrics_path != paths.metrics_jsonl:
+        shutil.copy2(paths.metrics_jsonl, metrics_path)
+
+
+def candidate_review_risk_text(candidate: dict[str, object]) -> str:
+    warnings = candidate.get("warning_reasons", [])
+    rejects = candidate.get("reject_reasons", [])
+    risks: list[str] = []
+    if isinstance(warnings, list):
+        risks.extend(str(item) for item in warnings)
+    if isinstance(rejects, list):
+        risks.extend(f"reject:{item}" for item in rejects)
+    return ", ".join(risks) if risks else "none"
+
+
+def write_candidate_review_ranking(
+    review_root: Path,
+    ranking_path: Path,
+    metrics_path: Path,
+    manifest: dict[str, object],
+    candidates: Sequence[dict[str, object]],
+    copied_audio: dict[int, list[Path]],
+) -> None:
+    limited_reasons = manifest.get("limited_reasons", [])
+    if not isinstance(limited_reasons, list):
+        limited_reasons = []
+    lines = [
+        "# Candidate Review Ranking",
+        "",
+        f"Review directory: `{review_root}`",
+        f"Metrics copy: `{metrics_path}`",
+        f"Candidate count: {len(candidates)}",
+        f"Candidate floor: {manifest.get('candidate_floor')}",
+        f"Manifest status: {manifest.get('status')}",
+        "Limited reasons: " + (", ".join(str(item) for item in limited_reasons) if limited_reasons else "none"),
+        "",
+    ]
+    if not candidates:
+        lines.extend(
+            [
+                "No viable candidates were selected.",
+                "",
+                "Risks/warnings: no checkpoint passed hard reject gates.",
+            ]
+        )
+    for candidate in candidates:
+        epoch = int(candidate["epoch"]) if isinstance(candidate.get("epoch"), int) else 0
+        rank = int(candidate["rank"]) if isinstance(candidate.get("rank"), int) else 1
+        rank_name = candidate_review_rank_name(rank)
+        score = candidate.get("score")
+        checkpoint_path = candidate.get("checkpoint_path")
+        lines.extend(
+            [
+                f"## Candidate {rank_name} (epoch {epoch})",
+                "",
+                f"- Rank: {rank}",
+                f"- Checkpoint: `{checkpoint_path}`",
+                f"- Score: {score}",
+                "- Why selected: selected from non-rejected checkpoints by score and warning count.",
+                f"- Risks/warnings: {candidate_review_risk_text(candidate)}",
+                "- Audio to listen:",
+            ]
+        )
+        for audio_path in copied_audio.get(epoch, []):
+            lines.append(f"  - `{audio_path.relative_to(review_root)}`")
+        lines.append("")
+    ranking_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
+def export_candidate_review_pack(args: argparse.Namespace, paths: RunPaths) -> CandidateReviewExport:
+    manifest = load_candidate_manifest(paths)
+    candidates = candidate_list_from_manifest(manifest)
+    candidate_sources = [(candidate, list_candidate_eval_sources(candidate)) for candidate in candidates]
+    review_root = resolve_candidate_review_root(args, paths)
+    review_root.mkdir(parents=True, exist_ok=True)
+    metrics_path = review_root / "metrics.jsonl"
+    ranking_path = review_root / "ranking.md"
+    copied_audio: dict[int, list[Path]] = {}
+    candidate_dirs: list[Path] = []
+    exported_epochs: list[int] = []
+
+    for candidate, sources in candidate_sources:
+        epoch = int(candidate["epoch"]) if isinstance(candidate.get("epoch"), int) else 0
+        rank = int(candidate["rank"]) if isinstance(candidate.get("rank"), int) else len(candidate_dirs) + 1
+        folder_name = str(candidate.get("label") or candidate_review_folder_name(rank, epoch))
+        candidate_dir = review_root / folder_name
+        candidate_dir.mkdir(parents=True, exist_ok=True)
+        copied_audio[epoch] = []
+        for source in sources:
+            target = candidate_dir / source.name
+            shutil.copy2(source, target)
+            copied_audio[epoch].append(target)
+        candidate_dirs.append(candidate_dir)
+        exported_epochs.append(epoch)
+
+    write_candidate_review_ranking(review_root, ranking_path, metrics_path, manifest, candidates, copied_audio)
+    export = CandidateReviewExport(
+        review_dir=str(review_root),
+        ranking_path=str(ranking_path),
+        metrics_path=str(metrics_path),
+        candidate_count=len(candidates),
+        exported_epochs=tuple(exported_epochs),
+        candidate_dirs=tuple(str(path) for path in candidate_dirs),
+    )
+    manifest["candidate_review"] = export.to_manifest()
+    paths.candidate_manifest.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    append_metrics(paths.metrics_jsonl, **export.to_row())
+    copy_candidate_review_metrics(paths, metrics_path)
+    return export
 
 
 def append_candidate_selection(args: argparse.Namespace, paths: RunPaths) -> CandidateSelection:
@@ -1545,6 +1751,7 @@ def orchestrate(args: argparse.Namespace) -> RunPaths:
     paths = build_paths(args.output_root, args.voice_name, args.run_name)
     ensure_run_dirs(paths)
     last_stop_decision: EarlyStopDecision | None = None
+    review_export: CandidateReviewExport | None = None
     append_metrics(
         paths.metrics_jsonl,
         event="run_start",
@@ -1582,6 +1789,7 @@ def orchestrate(args: argparse.Namespace) -> RunPaths:
                 )
             append_run_stop(paths, last_stop_decision)
         append_candidate_selection(args, paths)
+        review_export = export_candidate_review_pack(args, paths)
     except Exception as exc:
         append_metrics(
             paths.metrics_jsonl,
@@ -1592,6 +1800,8 @@ def orchestrate(args: argparse.Namespace) -> RunPaths:
         )
         raise
     append_metrics(paths.metrics_jsonl, event="run_end", status="ok")
+    if review_export is not None:
+        copy_candidate_review_metrics(paths, Path(review_export.metrics_path))
     return paths
 
 
@@ -1602,6 +1812,11 @@ def print_summary(paths: RunPaths) -> None:
     sys.stdout.write(f"checkpoints_dir={paths.checkpoints_dir}\n")
     sys.stdout.write(f"eval_dir={paths.eval_dir}\n")
     sys.stdout.write(f"candidate_manifest={paths.candidate_manifest}\n")
+    if paths.candidate_manifest.exists():
+        manifest = load_candidate_manifest(paths)
+        review = manifest.get("candidate_review")
+        if isinstance(review, dict) and review.get("review_dir"):
+            sys.stdout.write(f"candidate_review_dir={review['review_dir']}\n")
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -1615,6 +1830,12 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--train_raw_jsonl", type=Path, required=True, help="Ready dataset train_raw.jsonl")
     parser.add_argument("--output_root", type=Path, required=True, help="Root directory for this training run")
     parser.add_argument("--run_name", default=DEFAULT_RUN_NAME, help="Deterministic run name under the voice")
+    parser.add_argument(
+        "--candidate_review_root",
+        type=Path,
+        default=None,
+        help="Optional output directory for the copied candidate review pack.",
+    )
     parser.add_argument(
         "--min_epochs",
         type=int,
@@ -1798,6 +2019,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 __all__ = [
+    "CANDIDATE_REVIEW_RANK_NAMES",
     "DEFAULT_EVAL_PHRASES",
     "DEFAULT_EARLY_STOP_MIN_DELTA",
     "DEFAULT_CANDIDATE_FLOOR",
@@ -1810,6 +2032,7 @@ __all__ = [
     "DEFAULT_MIN_EPOCHS",
     "DEFAULT_PATIENCE",
     "DEFAULT_TOP_CANDIDATES",
+    "METRIC_EVENT_CANDIDATE_REVIEW_EXPORT",
     "QUALITY_DEGRADATION_REJECT_REASONS",
     "STOP_REASON_MAX_EPOCHS_REACHED",
     "STOP_REASON_MIN_EPOCHS_PENDING",
@@ -1818,15 +2041,17 @@ __all__ = [
     "STOP_REASON_PATIENCE_PENDING",
     "STOP_REASON_QUALITY_DEGRADATION",
     "STOP_REASON_SCORE_IMPROVED",
-    "EvalPhrase",
     "CandidateSelection",
+    "CandidateReviewExport",
     "CheckpointGate",
     "EarlyStopDecision",
     "EarlyStopPolicy",
+    "EvalPhrase",
     "MetricBackends",
     "HardRejectThresholds",
     "MetricThresholds",
     "MetricWeights",
+    "OrchestrationError",
     "RunPaths",
     "RunStop",
     "SampleMetrics",
@@ -1842,10 +2067,16 @@ __all__ = [
     "append_run_stop",
     "best_viable_gate_state",
     "candidate_entry_from_gate",
+    "candidate_review_folder_name",
+    "candidate_review_rank_name",
+    "candidate_list_from_manifest",
     "compute_sample_metrics",
+    "copy_candidate_review_metrics",
     "create_parser",
+    "default_candidate_review_root",
     "evaluate_early_stop_decision",
     "evaluate_checkpoint_gate",
+    "export_candidate_review_pack",
     "estimate_expected_duration_seconds",
     "early_stop_policy_row",
     "early_stop_policy_from_args",
@@ -1854,6 +2085,8 @@ __all__ = [
     "hard_reject_thresholds_from_args",
     "loss_summary_for_epoch",
     "latest_event_row",
+    "list_candidate_eval_sources",
+    "load_candidate_manifest",
     "metric_thresholds_row",
     "metric_weights_row",
     "orchestrate",
@@ -1861,11 +2094,13 @@ __all__ = [
     "read_metrics",
     "run_stop_from_decision",
     "resolve_backend_mode",
+    "resolve_candidate_review_root",
     "gate_has_quality_degradation",
     "stop_summary_from_metrics",
     "text_match_for_phrase",
     "text_match_ratio",
     "validate_args",
+    "write_candidate_review_ranking",
     "write_stub_wav",
 ]
 

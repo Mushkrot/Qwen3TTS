@@ -19,15 +19,18 @@ Current 2026-06-22 filesystem state:
 - `experiments/qwen3_ru_en_speaker_v1/runs/` and `samples/` currently contain only tracked scaffolds;
 - restore the historical checkpoint/sample artifacts from backup, or regenerate them, before running this evaluation protocol.
 
-## Fixed English phrase set
+## Fixed eval phrase set
 
-Generate exactly these 5 phrases for every checkpoint under test:
+Generate exactly these 5 files for every checkpoint under test:
 
-1. `This is a baseline quality check for the cloned voice.`
-2. `The system should speak naturally, with stable rhythm and clear pauses.`
-3. `In this lecture, we discuss the relationship between force, mass, and acceleration.`
-4. `Please slow down slightly and keep a calm, explanatory tone.`
-5. `The final result must sound close to the original speaker identity.`
+1. `01_en_short.wav` - `She said she would be here by noon.`
+2. `02_en_long.wav` - `The old railway station was quiet in the morning, but by evening it was full of people waiting for the last train.`
+3. `03_en_calm.wav` - `Take a slow breath, relax your shoulders, and speak with calm confidence.`
+4. `04_ru_short.wav` - `Сегодня хороший день для спокойной и ясной речи.`
+5. `05_ru_long.wav` - `Когда голос звучит естественно, слушатель легко понимает каждую фразу и не отвлекается на шум или странные паузы.`
+
+The English phrases remain the primary product objective. The Russian phrases
+are sanity checks for speaker identity and stability on source-language speech.
 
 ## Generation rules
 
@@ -36,11 +39,11 @@ Generate exactly these 5 phrases for every checkpoint under test:
 - Keep device and dtype constant (`cuda:0`, `bfloat16`) when possible.
 - Do not change punctuation or wording in the phrase set.
 - Save outputs under deterministic paths:
-  - `experiments/qwen3_ru_en_speaker_v1/samples/<run_name>_<checkpoint_tag>/01_sample.wav`
-  - `.../02_sample.wav`
-  - `.../03_sample.wav`
-  - `.../04_sample.wav`
-  - `.../05_sample.wav`
+  - `experiments/qwen3_ru_en_speaker_v1/samples/<voice_name>/<run_name>/candidate_review/candidate_A_epochN/01_en_short.wav`
+  - `.../02_en_long.wav`
+  - `.../03_en_calm.wav`
+  - `.../04_ru_short.wav`
+  - `.../05_ru_long.wav`
 
 ## Scoring checklist (1-5)
 
@@ -58,6 +61,8 @@ Score each category from 1 (bad) to 5 (excellent):
    - Stable speed, no rushing, natural pauses.
 6. English pronunciation clarity
    - Correct and intelligible English articulation.
+7. Russian sanity
+   - Russian phrases remain stable and recognizable without overriding the English objective.
 
 Optional notes per phrase:
 - Accent character (e.g., RU accent strong/medium/light).

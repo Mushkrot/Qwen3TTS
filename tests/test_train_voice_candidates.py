@@ -60,6 +60,7 @@ class TrainVoiceCandidatesContractTests(unittest.TestCase):
         self.assertEqual(self.module.METRIC_EVENT_CHECKPOINT_SCORE, "checkpoint_score")
         self.assertEqual(self.module.METRIC_EVENT_CHECKPOINT_GATE, "checkpoint_gate")
         self.assertEqual(self.module.METRIC_EVENT_CANDIDATE_SELECTION, "candidate_selection")
+        self.assertEqual(self.module.METRIC_EVENT_CANDIDATE_REVIEW_EXPORT, "candidate_review_export")
         self.assertEqual(self.module.METRIC_EVENT_EARLY_STOP_DECISION, "early_stop_decision")
         self.assertEqual(self.module.METRIC_EVENT_RUN_STOP, "run_stop")
         self.assertEqual(stop_policy["min_epochs"], 2)
@@ -153,6 +154,23 @@ class TrainVoiceCandidatesContractTests(unittest.TestCase):
         self.assertEqual(selection["event"], "candidate_selection")
         self.assertEqual(selection["selected_epochs"], [1, 3])
         self.assertEqual(selection["rejected_epochs"], [0, 2])
+        review_export = self.module.CandidateReviewExport(
+            review_dir="/tmp/review",
+            ranking_path="/tmp/review/ranking.md",
+            metrics_path="/tmp/review/metrics.jsonl",
+            candidate_count=2,
+            exported_epochs=(0, 1),
+            candidate_dirs=("/tmp/review/candidate_A_epoch0", "/tmp/review/candidate_B_epoch1"),
+        )
+        review_row = review_export.to_row()
+        review_manifest = review_export.to_manifest()
+        self.assertEqual(review_row["event"], "candidate_review_export")
+        self.assertEqual(review_row["exported_epochs"], [0, 1])
+        self.assertEqual(review_row["candidate_dirs"], ["/tmp/review/candidate_A_epoch0", "/tmp/review/candidate_B_epoch1"])
+        self.assertEqual(review_row["candidate_count"], 2)
+        self.assertEqual(review_row["review_dir"], "/tmp/review")
+        self.assertNotIn("event", review_manifest)
+        self.assertEqual(review_manifest["ranking_path"], "/tmp/review/ranking.md")
         stop_decision = self.module.EarlyStopDecision(
             epoch=2,
             should_stop=True,
@@ -197,6 +215,66 @@ class TrainVoiceCandidatesContractTests(unittest.TestCase):
         self.assertEqual(paths.promoted_checkpoint_path(0), Path("/tmp/out/Baritone/smoke/checkpoints/epoch-0"))
         self.assertEqual(paths.epoch_eval_dir(0), Path("/tmp/out/Baritone/smoke/eval/epoch-0"))
         self.assertEqual(paths.command_log_path("train", 0), Path("/tmp/out/Baritone/smoke/logs/train-epoch-0.log"))
+
+    def test_candidate_review_root_and_labels_are_deterministic(self) -> None:
+        parser = self.module.create_parser()
+        runs_args = parser.parse_args(
+            [
+                "--voice_name",
+                "Baritone",
+                "--train_raw_jsonl",
+                "/tmp/train_raw.jsonl",
+                "--output_root",
+                "/tmp/experiments/runs",
+                "--run_name",
+                "run1",
+            ]
+        )
+        runs_paths = self.module.build_paths(runs_args.output_root, runs_args.voice_name, runs_args.run_name)
+        self.assertEqual(
+            self.module.resolve_candidate_review_root(runs_args, runs_paths),
+            Path("/tmp/experiments/samples/Baritone/run1/candidate_review"),
+        )
+
+        custom_args = parser.parse_args(
+            [
+                "--voice_name",
+                "Baritone",
+                "--train_raw_jsonl",
+                "/tmp/train_raw.jsonl",
+                "--output_root",
+                "/tmp/experiments/runs",
+                "--run_name",
+                "run1",
+                "--candidate_review_root",
+                "/tmp/custom_review",
+            ]
+        )
+        custom_paths = self.module.build_paths(custom_args.output_root, custom_args.voice_name, custom_args.run_name)
+        self.assertEqual(self.module.resolve_candidate_review_root(custom_args, custom_paths), Path("/tmp/custom_review"))
+
+        local_args = parser.parse_args(
+            [
+                "--voice_name",
+                "Baritone",
+                "--train_raw_jsonl",
+                "/tmp/train_raw.jsonl",
+                "--output_root",
+                "/tmp/out",
+                "--run_name",
+                "smoke",
+            ]
+        )
+        local_paths = self.module.build_paths(local_args.output_root, local_args.voice_name, local_args.run_name)
+        self.assertEqual(
+            self.module.resolve_candidate_review_root(local_args, local_paths),
+            Path("/tmp/out/Baritone/smoke/candidate_review"),
+        )
+        self.assertEqual(self.module.candidate_review_folder_name(1, 0), "candidate_A_epoch0")
+        self.assertEqual(self.module.candidate_review_folder_name(2, 1), "candidate_B_epoch1")
+        self.assertEqual(self.module.candidate_review_folder_name(4, 3), "candidate_D_epoch3")
+        with self.assertRaises(ValueError):
+            self.module.candidate_review_folder_name(0, 0)
 
     def test_default_eval_phrase_filenames(self) -> None:
         filenames = [phrase.filename for phrase in self.module.DEFAULT_EVAL_PHRASES]
@@ -265,6 +343,7 @@ class TrainVoiceCandidatesContractTests(unittest.TestCase):
             "--train_raw_jsonl",
             "--output_root",
             "--run_name",
+            "--candidate_review_root",
             "--min_epochs",
             "--max_epochs",
             "--patience",
@@ -362,6 +441,7 @@ class TrainVoiceCandidatesContractTests(unittest.TestCase):
             self.assertIn("checkpoint_score", events)
             self.assertIn("checkpoint_gate", events)
             self.assertIn("candidate_selection", events)
+            self.assertIn("candidate_review_export", events)
             self.assertTrue(paths.candidate_manifest.exists())
             eval_rows = [row for row in rows if row["event"] == "eval_sample"]
             sample_metric_rows = [row for row in rows if row["event"] == "sample_metrics"]
@@ -397,6 +477,29 @@ class TrainVoiceCandidatesContractTests(unittest.TestCase):
             manifest = json.loads(paths.candidate_manifest.read_text(encoding="utf-8"))
             self.assertEqual([candidate["epoch"] for candidate in manifest["candidates"]], [0])
             self.assertEqual(manifest["rejected_checkpoints"], [])
+            review = manifest["candidate_review"]
+            self.assertEqual(review["candidate_count"], 1)
+            self.assertEqual(review["exported_epochs"], [0])
+            self.assertEqual(Path(review["review_dir"]), paths.run_dir / "candidate_review")
+            self.assertEqual(
+                sorted(path.name for path in Path(review["candidate_dirs"][0]).iterdir()),
+                [
+                    "01_en_short.wav",
+                    "02_en_long.wav",
+                    "03_en_calm.wav",
+                    "04_ru_short.wav",
+                    "05_ru_long.wav",
+                ],
+            )
+            ranking = Path(review["ranking_path"]).read_text(encoding="utf-8")
+            self.assertIn("Candidate A (epoch 0)", ranking)
+            self.assertIn("Why selected", ranking)
+            self.assertIn("Risks/warnings", ranking)
+            self.assertIn("01_en_short.wav", ranking)
+            self.assertEqual(Path(review["metrics_path"]).read_text(encoding="utf-8"), paths.metrics_jsonl.read_text(encoding="utf-8"))
+            review_export_rows = [row for row in rows if row["event"] == "candidate_review_export"]
+            self.assertEqual(review_export_rows[0]["candidate_count"], 1)
+            self.assertEqual(review_export_rows[0]["exported_epochs"], [0])
             for row in sample_metric_rows:
                 for key in (
                     "duration_seconds",
@@ -835,6 +938,135 @@ class TrainVoiceCandidatesContractTests(unittest.TestCase):
             self.assertTrue(selection.limited)
             self.assertEqual(manifest["status"], "limited")
             self.assertEqual(manifest["limited_reasons"], ["candidate_count_below_floor"])
+
+    def test_candidate_review_export_copies_only_selected_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = self.module.build_paths(tmp_path / "out", "Baritone", "review_export")
+            self.module.ensure_run_dirs(paths)
+            review_root = tmp_path / "review"
+            args = self.module.create_parser().parse_args(
+                [
+                    "--voice_name",
+                    "Baritone",
+                    "--train_raw_jsonl",
+                    "/tmp/train_raw.jsonl",
+                    "--output_root",
+                    str(tmp_path / "out"),
+                    "--run_name",
+                    "review_export",
+                    "--execution_mode",
+                    "stub",
+                    "--top_candidates",
+                    "1",
+                    "--candidate_review_root",
+                    str(review_root),
+                ]
+            )
+            for epoch in (0, 1):
+                eval_dir = paths.epoch_eval_dir(epoch)
+                eval_dir.mkdir(parents=True)
+                for phrase in self.module.DEFAULT_EVAL_PHRASES:
+                    self.module.write_stub_wav(eval_dir / phrase.filename, phrase.text)
+            rejected = self.module.CheckpointGate(
+                epoch=0,
+                checkpoint_path=str(paths.epoch_checkpoint_path(0)),
+                hard_rejected=True,
+                reject_reasons=("asr_text_mismatch",),
+                warning_reasons=(),
+                score=99.0,
+                metric_summary={"whisper_text_match_mean": 0.1},
+                comparison={},
+            )
+            viable = self.module.CheckpointGate(
+                epoch=1,
+                checkpoint_path=str(paths.epoch_checkpoint_path(1)),
+                hard_rejected=False,
+                reject_reasons=(),
+                warning_reasons=("missing_loss",),
+                score=80.0,
+                metric_summary={"pace_chars_per_sec_mean": 10.0},
+                comparison={},
+            )
+            self.module.append_metrics(paths.metrics_jsonl, **rejected.to_row())
+            self.module.append_metrics(paths.metrics_jsonl, **viable.to_row())
+            self.module.append_candidate_selection(args, paths)
+
+            export = self.module.export_candidate_review_pack(args, paths)
+            manifest = json.loads(paths.candidate_manifest.read_text(encoding="utf-8"))
+            rows = self.module.read_metrics(paths.metrics_jsonl)
+            review_export_rows = [row for row in rows if row["event"] == "candidate_review_export"]
+
+            self.assertEqual(export.exported_epochs, (1,))
+            self.assertEqual(export.candidate_count, 1)
+            self.assertEqual(len(review_export_rows), 1)
+            self.assertEqual(review_export_rows[0]["review_dir"], str(review_root))
+            self.assertEqual(review_export_rows[0]["exported_epochs"], [1])
+            self.assertTrue((review_root / "candidate_A_epoch1").is_dir())
+            self.assertFalse((review_root / "candidate_B_epoch0").exists())
+            self.assertEqual(
+                sorted(path.name for path in (review_root / "candidate_A_epoch1").iterdir()),
+                [
+                    "01_en_short.wav",
+                    "02_en_long.wav",
+                    "03_en_calm.wav",
+                    "04_ru_short.wav",
+                    "05_ru_long.wav",
+                ],
+            )
+            ranking = (review_root / "ranking.md").read_text(encoding="utf-8")
+            self.assertIn("Candidate A (epoch 1)", ranking)
+            self.assertIn("Candidate count: 1", ranking)
+            self.assertIn("Manifest status: limited", ranking)
+            self.assertIn("Limited reasons: candidate_count_below_floor", ranking)
+            self.assertIn("Checkpoint:", ranking)
+            self.assertIn("Score: 80.0", ranking)
+            self.assertIn("Risks/warnings: missing_loss", ranking)
+            self.assertIn("candidate_A_epoch1/01_en_short.wav", ranking)
+            self.assertTrue((review_root / "metrics.jsonl").exists())
+            self.assertEqual(manifest["candidate_review"]["review_dir"], str(review_root))
+            self.assertEqual(manifest["candidate_review"]["exported_epochs"], [1])
+            self.assertEqual(manifest["candidate_review"]["candidate_count"], 1)
+
+    def test_candidate_review_export_fails_when_selected_eval_audio_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            paths = self.module.build_paths(tmp_path / "out", "Baritone", "missing_audio")
+            self.module.ensure_run_dirs(paths)
+            review_root = tmp_path / "review"
+            args = self.module.create_parser().parse_args(
+                [
+                    "--voice_name",
+                    "Baritone",
+                    "--train_raw_jsonl",
+                    "/tmp/train_raw.jsonl",
+                    "--output_root",
+                    str(tmp_path / "out"),
+                    "--run_name",
+                    "missing_audio",
+                    "--execution_mode",
+                    "stub",
+                    "--candidate_review_root",
+                    str(review_root),
+                ]
+            )
+            paths.epoch_eval_dir(0).mkdir(parents=True)
+            gate = self.module.CheckpointGate(
+                epoch=0,
+                checkpoint_path=str(paths.epoch_checkpoint_path(0)),
+                hard_rejected=False,
+                reject_reasons=(),
+                warning_reasons=(),
+                score=80.0,
+                metric_summary={},
+                comparison={},
+            )
+            self.module.append_metrics(paths.metrics_jsonl, **gate.to_row())
+            self.module.append_candidate_selection(args, paths)
+
+            with self.assertRaises(self.module.OrchestrationError):
+                self.module.export_candidate_review_pack(args, paths)
+            self.assertFalse(review_root.exists())
 
     def test_candidate_manifest_limited_when_below_candidate_floor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

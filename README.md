@@ -50,10 +50,13 @@ As of 2026-06-22:
 - Historical checkpoints and sample packs named in older docs are not present in the working tree and must be restored from backup or regenerated before evaluation.
 - Project-local training orchestration is implemented for prepare-data,
   epoch-by-epoch training, eval packs, automatic metrics, hard-reject gates,
-  semi-auto early stopping, and candidate manifests. The default stopping
-  policy is `min_epochs=2`, `max_epochs=6`, `patience=2`, `top_candidates=4`.
-  Copied candidate WAV export and selected-checkpoint persistence are still
-  future work; the final voice remains human-selected from the top candidates.
+  semi-auto early stopping, candidate manifests, and exported candidate review
+  packs. The default stopping policy is `min_epochs=2`, `max_epochs=6`,
+  `patience=2`, `top_candidates=4`. The review pack lets the owner listen only
+  to exported candidates. After listening, the owner records the winning
+  candidate with `tools/select_voice_candidate.py`, which writes
+  `selected_checkpoint.json`, local experiment status, and a manifest
+  `winner_selection` block. The final voice remains human-selected.
 
 ## Quick onboarding
 

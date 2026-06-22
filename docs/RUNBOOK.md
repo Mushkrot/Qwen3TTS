@@ -116,7 +116,9 @@ dataset quality gate has been reviewed. It performs:
 7. one `checkpoint_gate` hard-reject decision per checkpoint;
 8. one `early_stop_decision` per checkpoint;
 9. a final `run_stop` row when the loop stops;
-10. final `candidate_selection` metadata and `candidate_manifest.json`.
+10. final `candidate_selection` metadata and `candidate_manifest.json`;
+11. a candidate review pack with copied selected eval WAVs, `ranking.md`, and
+    copied `metrics.jsonl`.
 
 Real command shape:
 
@@ -134,6 +136,16 @@ python tools/train_voice_candidates.py \
   --speaker_name speaker_target
 ```
 
+With `--output_root experiments/qwen3_ru_en_speaker_v1/runs`, the candidate
+review pack defaults to:
+
+```text
+experiments/qwen3_ru_en_speaker_v1/samples/Baritone/baritone_sft_candidates_001/candidate_review/
+```
+
+Use `--candidate_review_root /path/to/candidate_review` only when the owner
+wants a different review location.
+
 Real mode is GPU-heavy. Do not use it as a smoke test, and do not launch it
 until the dataset report shows only clean speech entering `train_raw.jsonl`.
 
@@ -148,10 +160,13 @@ creates sentinel checkpoint/eval files. It proves the project orchestration
 contract without loading Qwen, Torch, or soundfile. It also verifies that
 `metrics.jsonl` contains `sample_metrics`, one `checkpoint_score` row per
 checkpoint, one `checkpoint_gate` row per checkpoint, `early_stop_decision`
-rows, a final `run_stop` row, and one `candidate_selection` row. The current
-default smoke runs more than one stub epoch but stops before `max_epochs=6`.
-It prints stop reason, epochs completed, selected candidate count, and rejected
-checkpoint count.
+rows, a final `run_stop` row, one `candidate_selection` row, and one
+`candidate_review_export` row. The current default smoke runs more than one
+stub epoch but stops before `max_epochs=6`. It prints stop reason, epochs
+completed, selected candidate count, and rejected checkpoint count. Stage 7
+smoke also verifies and prints the candidate review directory, exported
+candidate count, `ranking.md` path, copied `metrics.jsonl` path, a review tree
+listing, and a ranking excerpt.
 
 Current Stage 4/5 metrics and gates:
 
@@ -201,7 +216,7 @@ Current stop reasons:
 
 Naturalness is represented by the proxy metrics and gates above. The system no
 longer requires owner listening after every epoch, but the final winner remains
-human-selected from the top candidates in `candidate_manifest.json`.
+human-selected from the exported candidates in `candidate_review/`.
 
 Backend modes are explicit. `--metrics_mode auto` resolves to audio metrics in
 stub smoke and real runs, `--metrics_mode off` records disabled audio metrics,
@@ -211,29 +226,88 @@ checkpoint scores numeric. For real ASR prompt matching, pass
 `--text_match_backend faster-whisper`; it lazily loads the configured
 `--text_match_model`, `--text_match_device`, and `--text_match_compute_type`.
 
-Generated `metrics.jsonl` files, `candidate_manifest.json` files, checkpoints,
-eval WAVs, command logs, and run directories are working artifacts and must not
-be committed. Raw audio in voice `Input/` folders is also not a commit target.
-Keep generated outputs under ignored experiment paths or `/tmp`; commit only
-code, tests, docs, scaffolds, small templates, and intentional metadata.
+Generated `metrics.jsonl` files, `candidate_manifest.json` files, copied review
+metrics, candidate review WAVs, checkpoints, eval WAVs, command logs, and run
+directories are working artifacts and must not be committed. Raw audio in voice
+`Input/` folders is also not a commit target. Keep generated outputs under
+ignored experiment paths or `/tmp`; commit only code, tests, docs, scaffolds,
+small templates, and intentional metadata.
 
 ## Checkpoint selection and review
 
 Use `docs/CHECKPOINT_SELECTION_PROTOCOL.md` before comparing training checkpoints.
 The current policy is semi-automatic candidate review: automatic metrics,
 hard gates, and project-local early stopping narrow a run to up to 3-4
-candidate checkpoints in `candidate_manifest.json`, then the owner chooses the
-final voice by listening. The run no longer requires listening after every
-epoch. Copied candidate WAV review packs and selected-checkpoint persistence
-are not implemented yet.
+candidate checkpoints in `candidate_manifest.json`, export those candidates to
+`candidate_review/`, then the owner chooses the final voice by listening only
+to those exported candidates. The run no longer requires listening after every
+epoch.
+
+After the owner chooses a candidate, record the winner:
+
+```bash
+python tools/select_voice_candidate.py \
+  --candidate B \
+  --candidate_review_dir experiments/qwen3_ru_en_speaker_v1/samples/Baritone/baritone_sft_candidates_001/candidate_review
+```
+
+`--candidate` accepts `A`, `B`, a numeric rank such as `2`, or a full label such
+as `candidate_B_epoch1`. If there is exactly one review pack under the current
+working tree, the script can discover it; if more than one exists, pass
+`--candidate_review_dir` explicitly. The command writes small metadata only:
+
+- `selected_checkpoint.json`;
+- `experiment_status.json`;
+- `candidate_manifest.json.winner_selection`.
+
+For normal experiment runs shaped as
+`experiments/<experiment>/runs/<voice>/<run_name>/candidate_manifest.json`, the
+durable pointer is `experiments/<experiment>/selected_checkpoint.json`. For
+temporary smoke runs, the pointer is written under the run directory. The
+selection command does not copy checkpoint directories, WAV files, metrics, or
+raw audio.
+
+Safe no-GPU winner-selection smoke:
+
+```bash
+bash scripts/run_select_voice_candidate_smoke.sh
+```
+
+The smoke first creates a Stage 7 review pack, selects `candidate_B_epoch1`, and
+verifies that `selected_checkpoint.json`, `experiment_status.json`, and
+`candidate_manifest.json.winner_selection` all point to the same checkpoint.
+It also verifies that the set of checkpoint directories, WAVs, and metrics files
+is unchanged by selection.
 
 Use `docs/templates/CANDIDATE_REVIEW_REPORT.md` as the report format when a
-candidate review pack is generated.
+candidate review pack is generated. The generated `ranking.md` is the quick
+listening guide; the template is for the owner's final notes and choice.
 
-Do not stage generated candidate WAVs, checkpoints, metrics, or candidate
-manifests. Keep them under ignored `experiments/**/samples/` and
-`experiments/**/runs/` paths unless a future small metadata file is deliberately
-promoted.
+Do not stage generated candidate WAVs, checkpoints, metrics, copied review
+metrics, ranking files, or generated candidate manifests. Keep them under
+ignored `experiments/**/samples/` and `experiments/**/runs/` paths. A small
+sanitized `selected_checkpoint.json`, `experiment_status.json`, or final report
+may be deliberately promoted if it is needed to preserve the chosen voice and
+contains no private source paths.
+
+## Deployment / release gate
+
+This project stage does not deploy a daemon, web app, or public service. Treat
+deployment as a local release gate before committing or starting a real training
+run:
+
+```bash
+python tools/select_voice_candidate.py --help
+python -m unittest discover -s tests
+bash scripts/run_train_voice_candidates_smoke.sh
+bash scripts/run_select_voice_candidate_smoke.sh
+python -m compileall -q tools scripts external/Qwen3-TTS/finetuning external/Qwen3-TTS/qwen_tts
+bash -n scripts/run_prepare_data.sh scripts/run_sft_0_6b.sh scripts/run_voice_filter_smoke.sh scripts/run_train_voice_candidates_smoke.sh scripts/run_select_voice_candidate_smoke.sh
+git diff --check
+git status --short --ignored
+```
+
+Only after this gate is green should the repository snapshot be committed.
 
 ## Commit checklist
 

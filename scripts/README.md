@@ -202,6 +202,15 @@ python tools/train_voice_candidates.py \
   --speaker_name speaker_target
 ```
 
+When `--output_root` is an experiment `runs` directory, the review pack defaults
+to the sibling samples tree:
+
+```text
+experiments/qwen3_ru_en_speaker_v1/samples/Baritone/baritone_sft_candidates_001/candidate_review/
+```
+
+Use `--candidate_review_root` to override that location.
+
 Real mode is GPU-heavy. It runs `scripts/run_prepare_data.sh`, then one
 `NUM_EPOCHS=1` training job per requested epoch through `scripts/run_sft_0_6b.sh`,
 then `scripts/run_infer_sample.py` once for each default eval phrase. The
@@ -219,6 +228,9 @@ Expected smoke artifacts:
 - `manifests/train_with_codes.jsonl`
 - `metrics.jsonl`
 - `candidate_manifest.json`
+- `candidate_review/ranking.md`
+- `candidate_review/metrics.jsonl`
+- `candidate_review/candidate_A_epochN/{01_en_short.wav,02_en_long.wav,03_en_calm.wav,04_ru_short.wav,05_ru_long.wav}`
 - `train/epoch-0/checkpoint-epoch-0/STUB_CHECKPOINT.txt`
 - `eval/epoch-N/{01_en_short.wav,02_en_long.wav,03_en_calm.wav,04_ru_short.wav,05_ru_long.wav}`
 
@@ -232,14 +244,20 @@ The smoke also verifies automatic metric, gate, and stopping rows in
 - one `early_stop_decision` row per completed epoch;
 - one final `run_stop` row;
 - one `candidate_selection` row after the epoch loop;
+- one `candidate_review_export` row after the review pack is written;
 - a parseable `candidate_manifest.json` with `candidate_floor`,
-  `stop_summary`, and no hard-rejected checkpoint epoch in `candidates`.
+  `stop_summary`, `candidate_review`, and no hard-rejected checkpoint epoch in
+  `candidates`;
+- a candidate review tree with `candidate_A_epochN` style folders, copied WAVs,
+  `ranking.md`, and copied `metrics.jsonl`.
 
 Default semi-auto stopping values are `min_epochs=2`, `max_epochs=6`,
 `patience=2`, `top_candidates=4`, and `candidate_floor=3`. The smoke should
 complete more than one stub epoch and stop before `max_epochs=6`. It prints the
 stop reason, epochs completed, selected candidate count, and rejected
-checkpoint count.
+checkpoint count. It also prints candidate review directory, exported candidate
+count, ranking path, copied metrics path, review tree listing, and a
+`ranking.md` excerpt.
 
 Always-computed audio metrics are `duration_ratio`, `pace_chars_per_sec`,
 `pace_words_per_sec`, `rms_dbfs`, `clipping_ratio`, `leading_silence_ms`, and
@@ -253,12 +271,13 @@ use `--speaker_similarity_backend stub` only for contract tests until a real
 embedding backend is wired. Missing optional backends keep the score numeric and
 add warnings such as `speaker_similarity_unavailable`.
 
-Generated `metrics.jsonl` files, checkpoints, eval WAVs, command logs, and
-training outputs are ignored working artifacts. Generated
-`candidate_manifest.json` files are also run artifacts, not commit targets. Raw
-audio in voice `Input/` folders is also not a commit target. Do not commit any
-of these files. Commit only the orchestrator code, tests, docs, small templates,
-and intentional metadata.
+Generated `metrics.jsonl` files, copied review metrics, review WAVs,
+checkpoints, eval WAVs, command logs, ranking files, and training outputs are
+ignored working artifacts. Generated `candidate_manifest.json` files are also
+run artifacts, not commit targets. Raw audio in voice `Input/` folders is also
+not a commit target. Do not commit any of these files. Commit only the
+orchestrator code, tests, docs, small templates, and intentional small
+selection metadata.
 
 Hard reject reasons currently emitted by the orchestrator:
 
@@ -289,8 +308,49 @@ Current stop reasons:
   `failure` row.
 
 Naturalness is currently represented by proxy metrics and hard gates. The
-system narrows the run without owner listening after every epoch; the owner
-still selects the final voice from the top candidates.
+system narrows the run without owner listening after every epoch. Stage 7
+exports the selected candidates into `candidate_review/`; the owner still
+selects the final voice from those exported candidates.
+
+## Winner selection (human choice -> selected checkpoint)
+
+After listening to `candidate_review/ranking.md` and the exported candidate
+folders, record the winner:
+
+```bash
+python tools/select_voice_candidate.py \
+  --candidate B \
+  --candidate_review_dir experiments/qwen3_ru_en_speaker_v1/samples/Baritone/baritone_sft_candidates_001/candidate_review
+```
+
+`--candidate` accepts `A`, `B`, `2`, or `candidate_B_epoch1`. The script reads
+`candidate_manifest.json.candidates`, rejects choices that are missing or only
+present in `rejected_checkpoints`, and writes:
+
+- `selected_checkpoint.json`;
+- `experiment_status.json`;
+- `candidate_manifest.json.winner_selection`.
+
+It does not copy checkpoint directories, generated WAVs, copied metrics, or raw
+audio. In the normal `experiments/<experiment>/runs/<voice>/<run_name>/` layout,
+the durable pointer lives at `experiments/<experiment>/selected_checkpoint.json`.
+In temp/smoke layouts, it lives under the run directory.
+
+Selection smoke:
+
+```bash
+bash scripts/run_select_voice_candidate_smoke.sh
+```
+
+The smoke creates a Stage 7 review pack, selects candidate B, verifies that the
+selected metadata and local experiment status point to candidate B's checkpoint
+and not candidate A's checkpoint, and verifies no heavy artifact copy was made.
+
+Current MVP: epoch-by-epoch training, fixed eval audio generation, simple
+metrics, hard rejects, semi-auto early stopping, top-4 candidate export, and
+human winner selection. Future improvements are speaker similarity, smarter
+scoring/naturalness signals, richer Markdown or HTML reports, and automatic
+recommended-candidate assistance.
 
 ## Quick inference
 

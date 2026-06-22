@@ -2,10 +2,10 @@
 
 ## Current Session
 
-Status: ready_for_next_step.
-Current focus: Stage 5 hard-reject checkpoint gates and candidate manifests are implemented and audited.
-Next step: Use a real cleaned dataset for training, then decide whether to add copied candidate audio export and automatic stopping.
-Last updated: 2026-06-22T15:40:00Z.
+Status: committed
+Current focus: Qwen3TTS candidate review and winner selection committed
+Next step: Use the committed workflow to build a real candidate_review from the real dataset, listen to candidates, then run tools/select_voice_candidate.py to record the human-selected winner.
+
 ## Active Constraints
 
 - Recallant is the main source of truth for durable memory.
@@ -14,9 +14,7 @@ Last updated: 2026-06-22T15:40:00Z.
 
 ## Open Questions
 
-- Which real training run should enable `--text_match_backend faster-whisper`.
-- Which speaker embedding backend should provide real `speaker_similarity`.
-- Whether to implement copied candidate WAV review packs before full automatic stopping.
+- None recorded.
 
 ## Recallant
 
