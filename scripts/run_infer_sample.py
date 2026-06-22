@@ -16,8 +16,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", required=True, help="Path to checkpoint directory")
     parser.add_argument("--speaker", required=True, help="Speaker name used in training")
     parser.add_argument("--text", default="She said she would be here by noon.", help="English test text")
+    parser.add_argument("--language", default="Auto", help="TTS language hint (e.g. russian, english, Auto)")
     parser.add_argument("--output_wav", required=True, help="Output wav path")
     parser.add_argument("--device", default="cuda:0", help="Torch device")
+    parser.add_argument("--max_new_tokens", type=int, default=500, help="Max generated codec tokens")
     parser.add_argument(
         "--attn_implementation",
         default="sdpa",
@@ -38,7 +40,12 @@ def main() -> int:
         attn_implementation=args.attn_implementation,
     )
 
-    wavs, sr = tts.generate_custom_voice(text=args.text, speaker=args.speaker)
+    wavs, sr = tts.generate_custom_voice(
+        text=args.text,
+        speaker=args.speaker,
+        language=args.language,
+        max_new_tokens=args.max_new_tokens,
+    )
     sf.write(str(output_path), wavs[0], sr)
     print(f"Wrote sample: {output_path}")
     return 0
