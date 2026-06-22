@@ -80,6 +80,8 @@ Current local source state on 2026-06-22:
   `--voice_filter_mode silero`.
 - The default filter path uses local Silero VAD first and rejects uncertain non-speech instead of passing
   continuous music/noise as voice.
+- For sources with intro music/title cards, use `--voice_filter_reject_initial_seconds` so opening chunks
+  are not allowed into the manifest even when speech is present over music.
 - Use `--voice_filter_mode off` to keep legacy behavior when you want zero filtering drift for existing datasets.
 
 ### Accepted segment purity rules (applies when filtering is on)

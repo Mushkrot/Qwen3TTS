@@ -151,6 +151,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Additionally write snippet wav files under output_root/filtered_out/snippets.",
     )
+    parser.add_argument(
+        "--voice_filter_reject_initial_seconds",
+        type=float,
+        default=0.0,
+        help="Reject accepted-candidate chunks that start inside the first N seconds of each source file.",
+    )
 
     # Backward-compatible legacy knobs kept as aliases for existing scripts.
     parser.add_argument(
@@ -527,6 +533,7 @@ def evaluate_segment_quality(
     source_duration: float,
     speech_ratio: float,
     args: argparse.Namespace,
+    start_sec: float = 0.0,
 ) -> SegmentQuality:
     word_count = len(seg_words)
     avg_confidence = sum(w.confidence for w in seg_words) / max(1, word_count)
@@ -551,6 +558,9 @@ def evaluate_segment_quality(
         reasons.append("non_voice_ratio_too_high")
     if args.voice_filter_mode != "off" and source_duration * 1000 < args.voice_filter_min_speech_ms:
         reasons.append("too_few_voice_frames")
+    if args.voice_filter_mode != "off" and args.voice_filter_reject_initial_seconds > 0:
+        if start_sec < args.voice_filter_reject_initial_seconds:
+            reasons.append("initial_window_rejected")
 
     return SegmentQuality(
         word_count=word_count,
@@ -686,6 +696,7 @@ def write_run_metadata(output_root: Path, args: argparse.Namespace, summary: dic
         "voice_filter_min_silence_ms": args.voice_filter_min_silence_ms,
         "voice_filter_merge_gap_ms": args.voice_filter_merge_gap_ms,
         "voice_filter_min_coverage": args.voice_filter_min_coverage,
+        "voice_filter_reject_initial_seconds": args.voice_filter_reject_initial_seconds,
         "input_dir": str(Path(args.input_dir).expanduser().resolve()),
         "output_root": str(output_root),
         "summary": summary,
@@ -1002,7 +1013,7 @@ def main() -> int:
             voice_overlap_ms = voice_overlap * duration * 1000
             source_duration_ms = duration * 1000
 
-            quality = evaluate_segment_quality(seg_words, text, duration, voice_overlap, args)
+            quality = evaluate_segment_quality(seg_words, text, duration, voice_overlap, args, start_sec=start_sec)
             if not quality.is_valid:
                 report_rows.append(
                     build_report_row(

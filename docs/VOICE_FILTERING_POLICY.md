@@ -57,6 +57,7 @@ Strict mode (`strict` / `--strict_mode`) keeps pre-ASR filtering on and uses `--
 - `--voice_filter_min_coverage`
 - `--voice_filter_export_quarantine`
 - `--voice_filter_export_quarantine_snippets`
+- `--voice_filter_reject_initial_seconds`
 - `--legacy_mode`
 - `--strict_mode`
 
@@ -85,6 +86,11 @@ Stable parseable rejection reasons:
 - `too_many_low_confidence_words`
 - `voice_filter_detection_failed`
 - `transcription_empty`
+- `initial_window_rejected`
+
+Use `--voice_filter_reject_initial_seconds` for audiobook/source files with intro music or title cards.
+It is a conservative guard: any candidate chunk that starts inside the configured opening window is rejected,
+even if speech is detected there.
 
 ## Quarantine
 

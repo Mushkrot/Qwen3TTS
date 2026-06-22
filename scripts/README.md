@@ -85,10 +85,11 @@ Strictness controls:
 - `--voice_filter_min_silence_ms` — minimum silence length considered split/gap
 - `--voice_filter_merge_gap_ms` — merges close speech regions
 - `--voice_filter_min_coverage` — minimum speech ratio inside final chunk
+- `--voice_filter_reject_initial_seconds` — reject opening chunks, useful for intro music/title cards
 
 Validation and notes:
 - `--voice_filter_export_quarantine` emits filtered-out regions for audit.
-- Rejection reasons are machine-parseable, including `no_voice_regions_detected`, `non_voice_ratio_too_high`, `too_few_voice_frames`, `region_too_short`, `too_many_low_confidence_words`, and others.
+- Rejection reasons are machine-parseable, including `no_voice_regions_detected`, `non_voice_ratio_too_high`, `initial_window_rejected`, `too_few_voice_frames`, `region_too_short`, `too_many_low_confidence_words`, and others.
 
 WhisperX notes:
 - WhisperX is optional, but if `--use_whisperx_align` is enabled the run is fail-fast.

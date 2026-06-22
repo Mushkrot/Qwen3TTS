@@ -85,6 +85,7 @@ python scripts/build_dataset_from_audio.py \
   --language ru \
   --voice_filter_mode silero \
   --strict_mode \
+  --voice_filter_reject_initial_seconds 30 \
   --voice_filter_export_quarantine \
   --voice_filter_export_quarantine_snippets \
   --validate_manifest
@@ -95,6 +96,9 @@ Review:
 - `Ready/<run_name>/reports/quality_report.json`
 - `Ready/<run_name>/filtered_out/removed_segments.jsonl`
 - `Ready/<run_name>/manifests/train_raw.jsonl`
+
+For audiobook-style sources with intro music/title cards, keep `--voice_filter_reject_initial_seconds`
+enabled and verify that early title/intro chunks are rejected with `initial_window_rejected`.
 
 Do not stage raw `Input/` audio or generated `Ready/` outputs unless a small metadata file is intentionally added.
 

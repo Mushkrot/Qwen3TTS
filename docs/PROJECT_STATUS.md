@@ -133,7 +133,7 @@ Update this file immediately after:
 
 ## Immediate next action
 
-1. Commit the restored code/docs/scaffold/policy state.
-2. Build a fresh dataset under `datasets/voices/Baritone/Ready/<run_name>`.
-3. Review quarantine/report output to confirm music/noise/non-speech rejection.
+1. Build a fresh dataset under `datasets/voices/Baritone/Ready/<run_name>` with `--voice_filter_reject_initial_seconds 30` for Baritone-style audiobook sources.
+2. Review quarantine/report output to confirm music/noise/non-speech rejection, including `initial_window_rejected` for title/intro chunks.
+3. Spot-check accepted chunks by ear before training.
 4. Restore or regenerate checkpoints/samples before measuring model quality.
