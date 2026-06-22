@@ -38,7 +38,7 @@ Recommendation:
 - Avoid duplicated or near-duplicated samples
 - No music, music-like intros/outros, or sustained non-voice content must pass into accepted chunks.
 - In `build_dataset_from_audio.py`, non-voice filtering is enabled by default with
-  `--voice_filter_mode hybrid`.
+  `--voice_filter_mode silero`.
 - Use `--voice_filter_mode off` to keep legacy behavior when you want zero filtering drift for existing datasets.
 
 ### Accepted segment purity rules (applies when filtering is on)

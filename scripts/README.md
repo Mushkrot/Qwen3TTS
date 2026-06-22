@@ -63,19 +63,20 @@ source .venv/bin/activate
 pip install whisperx
 ```
 
-## Smoke smoke: voice filter verification
+## Smoke voice filter verification
 
 Run the smoke command to validate non-voice filtering behavior on a synthetic input set:
 
 ```bash
 source .venv/bin/activate
-bash scripts/run_voice_filter_smoke.sh
+QWEN3TTS_SMOKE_ASR_MODEL=tiny QWEN3TTS_SMOKE_DEVICE=cpu bash scripts/run_voice_filter_smoke.sh
 ```
 
 Expected output:
-- printed acceptance summary,
-- generated manifest/report under `/tmp/qwen3tts_smoke_output/...`,
-- `quality_report` contains at least one explicit non-voice rejection reason.
+- printed acceptance and rejection summary,
+- generated manifest/report under `/tmp/qwen3tts_voice_filter_smoke/output/...`,
+- `quality_report` contains at least one explicit non-voice rejection reason,
+- `filtered_out/removed_segments.jsonl` exists and can be reviewed.
 
 ## Validation
 

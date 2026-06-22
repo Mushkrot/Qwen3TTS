@@ -19,6 +19,10 @@ For each run, non-voice portions must not enter `train_raw.jsonl`.
 - Chunks with speech coverage above `--voice_filter_min_coverage`
 - Chunks inside detected voice regions and validated by quality gates
 
+Acceptance guard:
+- If a chunk does not pass the speech coverage or quality gates, it is rejected and never written to `train_raw.jsonl`.
+- In strict mode, detector failures are treated as hard rejects for the source file, rather than passing whole-file fallback audio.
+
 ## Filter mode
 
 Modes supported by `scripts/build_dataset_from_audio.py`:
@@ -29,6 +33,14 @@ Modes supported by `scripts/build_dataset_from_audio.py`:
 - `whisper` / `whisper_only`: fallback voice-region path
 - `hybrid`, `strict`, `legacy`: compatibility aliases
 
+## Backend fallback chain
+
+`voice_filter` runs detectors in strict order:
+
+- `silero`/`vad`/`hybrid`: WebRTC-VAD (if installed), then ffmpeg silencedetect fallback.
+- `whisper`/`whisper_only`: strict fallback path (`detection_failed` if detector unavailable).
+- if all fallbacks fail and full fallback is disabled, the source file is rejected.
+
 ## Flags
 
 - `--voice_filter_mode`
@@ -38,6 +50,8 @@ Modes supported by `scripts/build_dataset_from_audio.py`:
 - `--voice_filter_min_coverage`
 - `--voice_filter_export_quarantine`
 - `--voice_filter_export_quarantine_snippets`
+- `--legacy_mode`
+- `--strict_mode`
 
 ## Report and metadata contract
 
@@ -62,6 +76,8 @@ Stable parseable rejection reasons:
 - `duration_too_long`
 - `avg_confidence_too_low`
 - `too_many_low_confidence_words`
+- `voice_filter_detection_failed`
+- `transcription_empty`
 
 ## Quarantine
 

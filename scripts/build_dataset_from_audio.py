@@ -155,13 +155,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max_no_speech_prob",
         type=float,
-        default=0.80,
+        default=None,
         help="Deprecated alias; retained for script compatibility.",
     )
     parser.add_argument(
         "--min_word_voice_overlap",
         type=float,
-        default=0.65,
+        default=None,
         help="Deprecated alias; retained for script compatibility.",
     )
     parser.add_argument(
@@ -174,6 +174,11 @@ def parse_args() -> argparse.Namespace:
         "--legacy_mode",
         action="store_true",
         help="Compatibility alias: equivalent to --voice_filter_mode off.",
+    )
+    parser.add_argument(
+        "--strict_mode",
+        action="store_true",
+        help="Compatibility alias for strict voice filtering. Equivalent to --voice_filter_mode strict.",
     )
 
     parser.add_argument(
@@ -199,13 +204,15 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def parse_filter_mode(mode: str, legacy_mode: bool) -> str:
+def parse_filter_mode(mode: str, legacy_mode: bool, strict_mode: bool) -> str:
     normalized = mode.lower()
     if legacy_mode:
         return "off"
 
     if normalized == "legacy":
         return "off"
+    if strict_mode:
+        return "silero"
     if normalized in {"hybrid", "strict"}:
         return "silero"
     if normalized == "whisper_only":
@@ -683,12 +690,75 @@ def write_run_metadata(output_root: Path, args: argparse.Namespace, summary: dic
     return metadata_path
 
 
+def add_rejected_segment(
+    *,
+    report_rows: list[dict[str, object]],
+    removed_rows: list[SpeechRow],
+    source_audio: str,
+    start_sec: float,
+    end_sec: float,
+    reasons: list[str],
+    args: argparse.Namespace,
+    seg_words: list[WordItem],
+    voice_overlap_ms: float,
+    voice_ratio: float,
+    filtered_out_dir: Path | None = None,
+    source_duration_ms: float | None = None,
+) -> float:
+    duration_ms = source_duration_ms
+    if duration_ms is None:
+        duration_ms = max(0.0, end_sec - start_sec) * 1000
+    duration_sec = duration_ms / 1000.0
+
+    report_rows.append(
+        build_report_row(
+            status="rejected",
+            source_audio=source_audio,
+            chunk_path=None,
+            start_sec=start_sec,
+            end_sec=end_sec,
+            text="",
+            reasons=reasons,
+            seg_words=seg_words,
+            source_duration_ms=duration_ms,
+            voice_overlap_ms=voice_overlap_ms,
+            voice_ratio=voice_ratio,
+            args=args,
+        )
+    )
+
+    if filtered_out_dir is None:
+        return duration_sec
+
+    removed_rows.append(
+        SpeechRow(
+            source_audio=source_audio,
+            start_sec=start_sec,
+            end_sec=end_sec,
+            duration_sec=duration_sec,
+            reasons=reasons,
+        )
+    )
+    return duration_sec
+
+
 def main() -> int:
     args = parse_args()
 
-    args.voice_filter_mode = parse_filter_mode(args.voice_filter_mode, args.legacy_mode)
+    args.voice_filter_mode = parse_filter_mode(
+        mode=args.voice_filter_mode,
+        legacy_mode=args.legacy_mode,
+        strict_mode=args.strict_mode,
+    )
     if args.min_segment_voice_ratio is not None:
         args.voice_filter_min_coverage = args.min_segment_voice_ratio
+
+    if args.min_word_voice_overlap and args.min_word_voice_overlap > 0:
+        args.voice_filter_min_coverage = min(1.0, max(0.0, args.min_word_voice_overlap))
+
+    # Retain compatibility with old scripts that exposed a no-speech threshold.
+    if args.max_no_speech_prob is not None and 0.0 <= args.max_no_speech_prob <= 1.0:
+        args.voice_filter_min_coverage = min(1.0, max(0.0, 1.0 - args.max_no_speech_prob))
 
     try:
         from faster_whisper import WhisperModel
@@ -769,16 +839,22 @@ def main() -> int:
         convert_audio(src_audio, wav24, sample_rate=24000)
         source_duration = audio_duration_seconds(wav16)
         source_seconds_total += source_duration
+        source_audio = str(src_audio.resolve())
 
         try:
-            voice_regions = detect_voice_regions(
-                wav16,
-                backend=args.voice_filter_mode,
-                sample_rate=16000,
-                min_speech_ms=args.voice_filter_min_speech_ms,
-                min_silence_ms=args.voice_filter_min_silence_ms,
-                merge_gap_ms=args.voice_filter_merge_gap_ms,
-            )
+            if args.voice_filter_mode == "off":
+                voice_regions = [VoiceRegion(0.0, source_duration)]
+            else:
+                voice_regions = detect_voice_regions(
+                    wav16,
+                    backend=args.voice_filter_mode,
+                    sample_rate=16000,
+                    min_speech_ms=args.voice_filter_min_speech_ms,
+                    min_silence_ms=args.voice_filter_min_silence_ms,
+                    merge_gap_ms=args.voice_filter_merge_gap_ms,
+                    noise_floor_db=-40.0,
+                    allow_fallback_to_full=False,
+                )
             # Keep explicit minimum duration behavior deterministic per contract.
             voice_regions = filter_regions_by_duration(
                 voice_regions,
@@ -790,41 +866,38 @@ def main() -> int:
             print(f"ERROR: {exc}")
             return 1
         except Exception as exc:
-            print(f"WARN: voice filter failed, using fallback full-file region for {src_audio.name}: {exc}")
-            voice_regions = [VoiceRegion(0.0, source_duration)]
-
-        if args.voice_filter_mode == "off":
-            voice_regions = [VoiceRegion(0.0, source_duration)]
-
-        if not voice_regions:
-            no_voice_reason = ["no_voice_regions_detected"]
-            report_rows.append(
-                build_report_row(
-                    status="rejected",
-                    source_audio=str(src_audio.resolve()),
-                    chunk_path=None,
+            print(f"WARN: voice filter failed, rejecting file {src_audio.name}: {exc}")
+            if not args.voice_filter_mode == "off":
+                rejected_seconds += add_rejected_segment(
+                    report_rows=report_rows,
+                    removed_rows=removed_rows if args.voice_filter_export_quarantine else [],
+                    source_audio=source_audio,
                     start_sec=0.0,
                     end_sec=source_duration,
-                    text="",
-                    reasons=no_voice_reason,
+                    reasons=["voice_filter_detection_failed"],
+                    args=args,
                     seg_words=[],
-                    source_duration_ms=source_duration * 1000,
                     voice_overlap_ms=0.0,
                     voice_ratio=0.0,
-                    args=args,
+                    filtered_out_dir=filtered_out_dir if args.voice_filter_export_quarantine else None,
                 )
+            continue
+
+        if not voice_regions:
+            rejected_seconds += add_rejected_segment(
+                report_rows=report_rows,
+                removed_rows=removed_rows if args.voice_filter_export_quarantine else [],
+                source_audio=source_audio,
+                start_sec=0.0,
+                end_sec=source_duration,
+                reasons=["no_voice_regions_detected"],
+                args=args,
+                seg_words=[],
+                voice_overlap_ms=0.0,
+                voice_ratio=0.0,
+                filtered_out_dir=filtered_out_dir if args.voice_filter_export_quarantine else None,
             )
-            rejected_seconds += source_duration
             if args.voice_filter_export_quarantine:
-                removed_rows.append(
-                    SpeechRow(
-                        source_audio=str(src_audio.resolve()),
-                        start_sec=0.0,
-                        end_sec=source_duration,
-                        duration_sec=source_duration,
-                        reasons=no_voice_reason,
-                    )
-                )
                 filtered_seconds += source_duration
             continue
 
@@ -832,15 +905,13 @@ def main() -> int:
             if region.end_sec <= region.start_sec:
                 continue
             if args.voice_filter_export_quarantine:
-                removed_rows.append(
-                    SpeechRow(
-                        source_audio=str(src_audio.resolve()),
-                        start_sec=region.start_sec,
-                        end_sec=region.end_sec,
-                        duration_sec=region.end_sec - region.start_sec,
-                        reasons=["filtered_out_region"],
-                    )
-                )
+                removed_rows.append(SpeechRow(
+                    source_audio=source_audio,
+                    start_sec=region.start_sec,
+                    end_sec=region.end_sec,
+                    duration_sec=region.end_sec - region.start_sec,
+                    reasons=["filtered_out_region"],
+                ))
                 filtered_seconds += region.end_sec - region.start_sec
                 if args.voice_filter_export_quarantine_snippets:
                     snippet = filtered_out_dir / "snippets" / f"{base}_removed_{int(region.start_sec*1000)}_{int(region.end_sec*1000)}.wav"
@@ -851,25 +922,22 @@ def main() -> int:
         for region_idx, region in enumerate(regions_to_process, start=1):
             if region.end_sec <= region.start_sec:
                 continue
+
             if (region.end_sec - region.start_sec) * 1000 < args.voice_filter_min_speech_ms:
                 reasons = ["too_few_voice_frames", "region_too_short"]
-                report_rows.append(
-                    build_report_row(
-                        status="rejected",
-                        source_audio=str(src_audio.resolve()),
-                        chunk_path=None,
-                        start_sec=region.start_sec,
-                        end_sec=region.end_sec,
-                        text="",
-                        reasons=reasons,
-                        seg_words=[],
-                        source_duration_ms=(region.end_sec - region.start_sec) * 1000,
-                        voice_overlap_ms=(region.end_sec - region.start_sec) * 1000,
-                        voice_ratio=1.0,
-                        args=args,
-                    )
+                rejected_seconds += add_rejected_segment(
+                    report_rows=report_rows,
+                    removed_rows=removed_rows if args.voice_filter_export_quarantine else [],
+                    source_audio=source_audio,
+                    start_sec=region.start_sec,
+                    end_sec=region.end_sec,
+                    reasons=reasons,
+                    args=args,
+                    seg_words=[],
+                    voice_overlap_ms=(region.end_sec - region.start_sec) * 1000,
+                    voice_ratio=1.0,
+                    filtered_out_dir=filtered_out_dir if args.voice_filter_export_quarantine else None,
                 )
-                rejected_seconds += region.end_sec - region.start_sec
                 continue
 
             tmp = temp_regions_dir / f"{base}_region_{region_idx:03d}.wav"
@@ -894,23 +962,19 @@ def main() -> int:
             words.extend(region_words)
 
         if not words:
-            report_rows.append(
-                build_report_row(
-                    status="rejected",
-                    source_audio=str(src_audio.resolve()),
-                    chunk_path=None,
-                    start_sec=0.0,
-                    end_sec=source_duration,
-                    text="",
-                    reasons=["too_few_voice_frames"],
-                    seg_words=[],
-                    source_duration_ms=source_duration * 1000,
-                    voice_overlap_ms=0.0,
-                    voice_ratio=0.0,
-                    args=args,
-                )
+            rejected_seconds += add_rejected_segment(
+                report_rows=report_rows,
+                removed_rows=removed_rows if args.voice_filter_export_quarantine else [],
+                source_audio=source_audio,
+                start_sec=0.0,
+                end_sec=source_duration,
+                reasons=["transcription_empty"],
+                args=args,
+                seg_words=[],
+                voice_overlap_ms=0.0,
+                voice_ratio=0.0,
+                filtered_out_dir=filtered_out_dir if args.voice_filter_export_quarantine else None,
             )
-            rejected_seconds += source_duration
             continue
 
         boundaries = split_into_segments(words, seg_cfg)
