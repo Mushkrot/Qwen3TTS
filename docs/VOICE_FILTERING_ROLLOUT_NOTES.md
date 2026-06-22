@@ -27,8 +27,8 @@ This handoff note captures implementation status, verification evidence, and rol
 6) ✅ Runtime controls, compatibility toggles, off mode:
    - `--voice_filter_mode`, `--strict_mode`, `--legacy_mode`, compatibility aliases
 7) ✅ Smoke verification command and docs:
-   - `scripts/run_voice_filter_smoke.sh`
-   - `scripts/README.md`
+   - `scripts/run_voice_filter_smoke.sh` now runs deterministic filter-only checks when `faster-whisper` is unavailable.
+   - `scripts/README.md` documents both ASR and filter-only smoke paths plus fallback control.
 8) ⚠️ Hardening + full verification is implemented but environment-dependent:
    - non-trainable check steps below were partially blocked by missing `faster-whisper`.
 
@@ -40,13 +40,15 @@ Executed in `/ai/Qwen3TTS`:
 - `python scripts/build_dataset_from_audio.py --help` ✅
 - `python scripts/voice_filter.py <speech.wav> --backend silero --sample_rate 16000` ✅ (returns non-empty speech spans)
 - `python scripts/voice_filter.py <silence.wav> --backend silero --sample_rate 16000` ❌ by design without `webrtcvad`? returns no regions and enforces strict filter failure path (no fallback-to-full path)
-- `bash scripts/run_voice_filter_smoke.sh` ❌ until `faster-whisper` is installed in this environment
+- `bash scripts/run_voice_filter_smoke.sh` ✅ now runnable without `faster-whisper` in filter-only mode;
+  use `QWEN3TTS_SMOKE_REQUIRE_ASR=1` for full ASR-run enforcement.
 
 ## Known blocker and safe-rollout precondition
 
 - `faster-whisper` is required by `scripts/build_dataset_from_audio.py` and the full smoke path.
 - Error observed:
-  - `ERROR: faster-whisper is required for dataset builder. Details: No module named 'faster_whisper'`
+- `ERROR: faster-whisper is required for dataset builder. Details: No module named 'faster_whisper'`
+  (pipeline smoke still runs in filter-only mode by default, unless ASR enforcement is forced).
 - Install in active virtualenv before final rollout verification.
 
 ## Final rollout command sequence

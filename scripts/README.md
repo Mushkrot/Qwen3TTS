@@ -74,6 +74,18 @@ source .venv/bin/activate
 QWEN3TTS_SMOKE_ASR_MODEL=tiny QWEN3TTS_SMOKE_DEVICE=cpu bash scripts/run_voice_filter_smoke.sh
 ```
 
+If `faster-whisper` is installed, the smoke runs full dataset creation and ASR-based rejection checks.
+If it is missing, the command falls back to a filter-only smoke mode and still writes deterministic
+`reports/smoke_voice_filter.json` and `filtered_out/removed_segments.jsonl` files.
+
+Control fallback behavior with:
+
+```bash
+QWEN3TTS_SMOKE_REQUIRE_ASR=1 bash scripts/run_voice_filter_smoke.sh
+```
+
+If `QWEN3TTS_SMOKE_REQUIRE_ASR=1`, the command exits with error when `faster-whisper` is absent.
+
 Expected output:
 - printed acceptance and rejection summary,
 - generated manifest/report under `/tmp/qwen3tts_voice_filter_smoke/output/...`,
