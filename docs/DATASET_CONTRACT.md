@@ -42,9 +42,9 @@ Recommendation:
 - Use `--voice_filter_mode off` to keep legacy behavior when you want zero filtering drift for existing datasets.
 
 ### Accepted segment purity rules (applies when filtering is on)
-- Segment must have low `no_speech` behavior (`segment.no_speech_prob` below threshold).
-- Segments with low speech overlap are rejected (`insufficient_voice_coverage` in report).
-- In `strict` mode, words with low overlap to detected speech are removed before chunking.
+- Segment must satisfy configured speech-overlap purity (`--voice_filter_min_coverage`).
+- Segments with low overlap are rejected with `non_voice_ratio_too_high` in report.
+- In strict mode (`--strict_mode` or `--voice_filter_mode strict`), default coverage is `1.0` unless an explicit override is provided.
 - Dataset manifest schema remains unchanged (`audio`, `text`, `ref_audio`), only filtering behavior changes.
 
 ---

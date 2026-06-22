@@ -137,8 +137,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--voice_filter_min_coverage",
         type=float,
-        default=0.75,
-        help="Minimum required speech coverage ratio per final chunk.",
+        default=None,
+        help="Minimum required speech coverage ratio per final chunk. "
+             "Defaults are mode-dependent: 0.75 for standard mode, 1.0 for strict mode.",
     )
     parser.add_argument(
         "--voice_filter_export_quarantine",
@@ -204,20 +205,24 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def parse_filter_mode(mode: str, legacy_mode: bool, strict_mode: bool) -> str:
+def parse_filter_mode(
+    mode: str,
+    legacy_mode: bool,
+    strict_mode: bool,
+) -> tuple[str, bool]:
     normalized = mode.lower()
     if legacy_mode:
-        return "off"
+        return "off", False
 
     if normalized == "legacy":
-        return "off"
-    if strict_mode:
-        return "silero"
-    if normalized in {"hybrid", "strict"}:
-        return "silero"
+        return "off", False
+
+    if strict_mode or normalized in {"hybrid", "strict"}:
+        return "silero", True
+
     if normalized == "whisper_only":
-        return "whisper"
-    return normalized
+        return "whisper", False
+    return normalized, False
 
 
 def run_ffmpeg(command: list[str], *, check_result: bool = True) -> subprocess.CompletedProcess:
@@ -745,11 +750,14 @@ def add_rejected_segment(
 def main() -> int:
     args = parse_args()
 
-    args.voice_filter_mode = parse_filter_mode(
+    args.voice_filter_mode, strict_mode_active = parse_filter_mode(
         mode=args.voice_filter_mode,
         legacy_mode=args.legacy_mode,
         strict_mode=args.strict_mode,
     )
+    if args.voice_filter_min_coverage is None:
+        args.voice_filter_min_coverage = 1.0 if strict_mode_active else 0.75
+
     if args.min_segment_voice_ratio is not None:
         args.voice_filter_min_coverage = args.min_segment_voice_ratio
 
@@ -759,6 +767,8 @@ def main() -> int:
     # Retain compatibility with old scripts that exposed a no-speech threshold.
     if args.max_no_speech_prob is not None and 0.0 <= args.max_no_speech_prob <= 1.0:
         args.voice_filter_min_coverage = min(1.0, max(0.0, 1.0 - args.max_no_speech_prob))
+    else:
+        args.voice_filter_min_coverage = min(1.0, max(0.0, args.voice_filter_min_coverage))
 
     try:
         from faster_whisper import WhisperModel

@@ -33,6 +33,8 @@ Modes supported by `scripts/build_dataset_from_audio.py`:
 - `whisper` / `whisper_only`: fallback voice-region path
 - `hybrid`, `strict`, `legacy`: compatibility aliases
 
+Strict mode (`strict` / `--strict_mode`) keeps pre-ASR filtering on and uses `--voice_filter_min_coverage=1.0` by default.
+
 ## Backend fallback chain
 
 `voice_filter` runs detectors in strict order:

@@ -43,6 +43,8 @@ Optional:
 - `whisper` / `whisper_only`: whisper-style fallback path
 - `hybrid`, `strict`, `legacy`: compatibility aliases
 
+`strict` / `--strict_mode` enforces full-voice purity by default with `--voice_filter_min_coverage=1.0` (unless explicitly overridden).
+
 Strictness controls:
 - `--voice_filter_min_speech_ms` — minimum region length kept as speech
 - `--voice_filter_min_silence_ms` — minimum silence length considered split/gap
