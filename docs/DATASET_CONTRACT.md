@@ -78,6 +78,8 @@ Current local source state on 2026-06-22:
 - No music, music-like intros/outros, or sustained non-voice content must pass into accepted chunks.
 - In `build_dataset_from_audio.py`, non-voice filtering is enabled by default with
   `--voice_filter_mode silero`.
+- The default filter path uses local Silero VAD first and rejects uncertain non-speech instead of passing
+  continuous music/noise as voice.
 - Use `--voice_filter_mode off` to keep legacy behavior when you want zero filtering drift for existing datasets.
 
 ### Accepted segment purity rules (applies when filtering is on)

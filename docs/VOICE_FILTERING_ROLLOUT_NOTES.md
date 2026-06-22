@@ -46,7 +46,8 @@ Executed in `/ai/Qwen3TTS`:
 - `python scripts/voice_filter.py <speech.wav> --backend silero --sample_rate 16000` ✅ (returns non-empty speech spans)
 - `python scripts/voice_filter.py <silence.wav> --backend silero --sample_rate 16000` ✅ returns no regions and follows strict-no-voice rejection path.
 - `bash scripts/run_voice_filter_smoke.sh` ✅ now runnable without `faster-whisper` in filter-only mode;
-  use `QWEN3TTS_SMOKE_REQUIRE_ASR=1` for full ASR-run enforcement.
+  it uses the project `.venv` automatically and asserts speech accepted, music rejected, silence rejected,
+  and mixed speech+non-speech rejected. Use `QWEN3TTS_SMOKE_REQUIRE_ASR=1` for full ASR-run enforcement.
 - `QWEN3TTS_SMOKE_FORCE_FILTER_ONLY=1` also forces deterministic filter-only smoke checks when ASR is installed but model/network access is unavailable.
 
 Latest 2026-06-22 verification after recovery:
@@ -56,6 +57,7 @@ Latest 2026-06-22 verification after recovery:
 - `soundfile`, `faster_whisper`, and `qwen_tts` import.
 - `python scripts/run_infer_sample.py --help` works without importing heavy runtime dependencies before argparse.
 - `bash scripts/run_voice_filter_smoke.sh` passes by using local Baritone input in filter-only mode.
+  Latest observed rows: `voice.wav` accepted; `music.wav`, `silence.wav`, and `mixed.wav` rejected.
 - `QWEN3TTS_SMOKE_REQUIRE_ASR=1 ... bash scripts/run_voice_filter_smoke.sh` against the local Baritone fallback can still fail with `ERROR: no dataset rows produced`; use a known-good short speech fixture for full ASR smoke.
 
 ## Known blocker and safe-rollout precondition
@@ -104,8 +106,9 @@ bash scripts/run_voice_filter_smoke.sh
 
 Expected pass criteria:
 
-- `reports/smoke_voice_filter.json` exists and contains at least one `rejected` row with reason
-  one of: `no_voice_regions_detected`, `non_voice_ratio_too_high`, `voice_filter_detection_failed`, `transcription_empty`.
+- `reports/smoke_voice_filter.json` exists.
+- In filter-only mode, `voice.wav` is accepted; `music.wav` and `silence.wav` are rejected with
+  `no_voice_regions_detected`; `mixed.wav` is rejected with `non_voice_ratio_too_high`.
 - `filtered_out/removed_segments.jsonl` exists and is inspectable.
 - Every row in output `manifest` passed all quality and voice-overlap gates.
 

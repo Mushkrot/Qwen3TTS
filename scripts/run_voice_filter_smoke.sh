@@ -7,6 +7,15 @@ INPUT_DIR="$TMP_DIR/input"
 OUTPUT_DIR="$TMP_DIR/output"
 REQUIRE_ASR="${QWEN3TTS_SMOKE_REQUIRE_ASR:-0}"
 FORCE_FILTER_ONLY="${QWEN3TTS_SMOKE_FORCE_FILTER_ONLY:-0}"
+PYTHON_BIN="${QWEN3TTS_PYTHON:-}"
+
+if [ -z "$PYTHON_BIN" ]; then
+  if [ -x "$ROOT_DIR/.venv/bin/python" ]; then
+    PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
+  else
+    PYTHON_BIN="python"
+  fi
+fi
 
 DEFAULT_VOICE_SOURCE="${ROOT_DIR}/experiments/qwen3_ru_en_speaker_v1/samples/smoke_1_7b_epoch0_en.wav"
 LOCAL_BARITONE_SOURCE="${ROOT_DIR}/datasets/voices/Baritone/Input/Baritone1.mp3"
@@ -14,15 +23,19 @@ LOCAL_BARITONE_SOURCE="${ROOT_DIR}/datasets/voices/Baritone/Input/Baritone1.mp3"
 if [ -n "${QWEN3TTS_SMOKE_VOICE_SOURCE:-}" ]; then
   VOICE_SOURCE="$QWEN3TTS_SMOKE_VOICE_SOURCE"
   VOICE_SOURCE_KIND="custom"
+  VOICE_SOURCE_OFFSET="${QWEN3TTS_SMOKE_VOICE_OFFSET:-0}"
 elif [ -f "$DEFAULT_VOICE_SOURCE" ]; then
   VOICE_SOURCE="$DEFAULT_VOICE_SOURCE"
   VOICE_SOURCE_KIND="default_sample"
+  VOICE_SOURCE_OFFSET="${QWEN3TTS_SMOKE_VOICE_OFFSET:-0}"
 elif [ -f "$LOCAL_BARITONE_SOURCE" ]; then
   VOICE_SOURCE="$LOCAL_BARITONE_SOURCE"
   VOICE_SOURCE_KIND="local_baritone"
+  VOICE_SOURCE_OFFSET="${QWEN3TTS_SMOKE_VOICE_OFFSET:-27}"
 else
   VOICE_SOURCE="$DEFAULT_VOICE_SOURCE"
   VOICE_SOURCE_KIND="missing_default"
+  VOICE_SOURCE_OFFSET="${QWEN3TTS_SMOKE_VOICE_OFFSET:-0}"
 fi
 
 ASR_MODEL="${QWEN3TTS_SMOKE_ASR_MODEL:-tiny}"
@@ -43,7 +56,7 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v python >/dev/null 2>&1; then
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   echo "ERROR: python is required for smoke script."
   exit 1
 fi
@@ -57,9 +70,9 @@ fi
 rm -rf "$TMP_DIR"
 mkdir -p "$INPUT_DIR" "$OUTPUT_DIR"
 
-ffmpeg -hide_banner -loglevel error -y -i "$VOICE_SOURCE" -t 3 -af "atrim=0:3" "$INPUT_DIR/voice.wav"
-ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=440:duration=2" "$INPUT_DIR/music.wav"
-ffmpeg -hide_banner -loglevel error -y -f lavfi -i "anullsrc=r=16000:cl=mono:d=1" "$INPUT_DIR/silence.wav"
+ffmpeg -hide_banner -loglevel error -y -ss "$VOICE_SOURCE_OFFSET" -i "$VOICE_SOURCE" -t 3 -ac 1 -ar 16000 "$INPUT_DIR/voice.wav"
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=440:duration=8:sample_rate=16000" -ac 1 -ar 16000 "$INPUT_DIR/music.wav"
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i "anullsrc=r=16000:cl=mono:d=2" "$INPUT_DIR/silence.wav"
 
 cat > "$INPUT_DIR/concat.txt" <<'EOF'
 file 'voice.wav'
@@ -70,9 +83,9 @@ EOF
 
 ffmpeg -hide_banner -loglevel error -y \
   -f concat -safe 0 -i "$INPUT_DIR/concat.txt" \
-  -c copy "$INPUT_DIR/mixed.wav"
+  -ac 1 -ar 16000 "$INPUT_DIR/mixed.wav"
 
-HAS_FASTER_WHISPER="$(python - <<'PY'
+HAS_FASTER_WHISPER="$("$PYTHON_BIN" - <<'PY'
 import importlib.util
 
 print("1" if importlib.util.find_spec("faster_whisper") else "0")
@@ -93,7 +106,7 @@ if [ "$FORCE_FILTER_ONLY" = "1" ] || [ "$HAS_FASTER_WHISPER" = "0" ]; then
     echo "[smoke] running filter-only smoke by request."
   fi
 
-  python - "$OUTPUT_DIR" "$INPUT_DIR" "$ROOT_DIR" <<'PY'
+  "$PYTHON_BIN" - "$OUTPUT_DIR" "$INPUT_DIR" "$ROOT_DIR" <<'PY'
 import json
 import subprocess
 import sys
@@ -213,11 +226,19 @@ if removed_rows:
 
 accepted = [r for r in report_rows if r["status"] == "accepted"]
 rejected = [r for r in report_rows if r["status"] == "rejected"]
-has_non_voice = any("non_voice_ratio_too_high" in r["reasons"] or "no_voice_regions_detected" in r["reasons"] for r in rejected)
+by_name = {Path(r["source_audio"]).name: r for r in report_rows}
 
-if not accepted or not rejected:
-    raise SystemExit("[smoke] expected mixed voice/non-voice results in filter-only mode")
-if not has_non_voice:
+if by_name["voice.wav"]["status"] != "accepted":
+    raise SystemExit("[smoke] expected voice.wav to be accepted in filter-only mode")
+for non_voice_name in ["music.wav", "silence.wav"]:
+    if by_name[non_voice_name]["status"] != "rejected":
+        raise SystemExit(f"[smoke] expected {non_voice_name} to be rejected in filter-only mode")
+if by_name["mixed.wav"]["status"] != "rejected":
+    raise SystemExit("[smoke] expected mixed.wav to be rejected in filter-only mode")
+if not any(
+    "non_voice_ratio_too_high" in r["reasons"] or "no_voice_regions_detected" in r["reasons"]
+    for r in rejected
+):
     raise SystemExit("[smoke] expected explicit non-voice rejection reason in filter-only mode")
 
 print(f"[smoke] accepted rows: {len(accepted)}")
@@ -229,7 +250,7 @@ PY
   exit 0
 fi
 
-python "$ROOT_DIR/scripts/build_dataset_from_audio.py" \
+"$PYTHON_BIN" "$ROOT_DIR/scripts/build_dataset_from_audio.py" \
   --input_dir "$INPUT_DIR" \
   --output_root "$OUTPUT_DIR" \
   --language "$ASR_LANGUAGE" \
@@ -254,7 +275,7 @@ python "$ROOT_DIR/scripts/build_dataset_from_audio.py" \
   --target_duration 4 \
   --validate_manifest
 
-python - "$OUTPUT_DIR"/reports/smoke_voice_filter.json "$OUTPUT_DIR"/filtered_out/removed_segments.jsonl <<'PY'
+"$PYTHON_BIN" - "$OUTPUT_DIR"/reports/smoke_voice_filter.json "$OUTPUT_DIR"/filtered_out/removed_segments.jsonl <<'PY'
 import json
 import os
 import sys

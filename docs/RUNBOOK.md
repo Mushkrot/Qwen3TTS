@@ -52,12 +52,13 @@ python scripts/run_infer_sample.py --help
 Default local voice-filter smoke:
 
 ```bash
-source .venv/bin/activate
 bash scripts/run_voice_filter_smoke.sh
 ```
 
 When the historical frozen sample is missing, the script uses local Baritone input and runs filter-only smoke by default.
 This validates the voice/non-voice rejection path without treating raw Baritone audio as a stable ASR fixture.
+It uses `.venv/bin/python` automatically when present.
+Expected filter-only result: speech accepted, music rejected, silence rejected, and mixed speech+non-speech rejected.
 
 Full ASR smoke:
 

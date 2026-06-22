@@ -39,8 +39,12 @@ Strict mode (`strict` / `--strict_mode`) keeps pre-ASR filtering on and uses `--
 
 `voice_filter` runs detectors in strict order:
 
-- `silero`/`vad`/`hybrid`: WebRTC-VAD (if installed), then ffmpeg silencedetect fallback.
-  The mode names are compatibility/API labels; current local implementation does not require a separate Silero model package.
+- `silero`/`vad`/`hybrid`: local Silero VAD model cache first, then WebRTC-VAD when installed, then
+  conservative ffmpeg silencedetect fallback only when model-based VAD is unavailable.
+- The default local Silero cache path is `/ai/models/torch_cache/hub/snakers4_silero-vad_master`.
+  Override it with `QWEN3TTS_SILERO_VAD_DIR` when needed.
+- The ffmpeg fallback is energy/silence based, not a speech classifier. If it sees continuous non-silent
+  audio with no silence regions, it returns no speech regions instead of passing the whole file.
 - `whisper`/`whisper_only`: strict fallback path (`detection_failed` if detector unavailable).
 - if all fallbacks fail and full fallback is disabled, the source file is rejected.
 

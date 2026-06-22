@@ -111,7 +111,7 @@ def parse_args() -> argparse.Namespace:
         default="silero",
         help=(
             "off: disable pre-ASR filtering; "
-            "silero/vad: run voice-region detector; "
+            "silero/vad: run local Silero VAD voice-region detector; "
             "whisper/whisper_only: use whisper-style fallback; "
             "hybrid/strict: legacy aliases -> silero"
         ),

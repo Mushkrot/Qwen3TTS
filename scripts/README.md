@@ -73,7 +73,7 @@ Optional:
 
 `voice_filter_mode`:
 - `off`: legacy mode, no pre-ASR filtering (compatibility path)
-- `silero` (default): primary voice-region detector path
+- `silero` (default): local Silero VAD first, then conservative fallbacks
 - `vad`: same behavior as `silero`
 - `whisper` / `whisper_only`: whisper-style fallback path
 - `hybrid`, `strict`, `legacy`: compatibility aliases
@@ -105,16 +105,23 @@ pip install whisperx
 Run the smoke command to validate non-voice filtering behavior on a synthetic input set:
 
 ```bash
-source .venv/bin/activate
 bash scripts/run_voice_filter_smoke.sh
 ```
 
+The script uses `.venv/bin/python` automatically when it exists. Set `QWEN3TTS_PYTHON=/path/to/python`
+to force another interpreter.
+
 If the historical frozen smoke sample is missing but local Baritone input exists, the command uses
-`datasets/voices/Baritone/Input/Baritone1.mp3` and runs filter-only smoke by default. This avoids
+`datasets/voices/Baritone/Input/Baritone1.mp3` from a stable speech offset and runs filter-only smoke by default. This avoids
 treating arbitrary raw source audio as a stable ASR fixture while still validating non-voice rejection.
 
 If `faster-whisper` is missing, the command also falls back to filter-only smoke and still writes
 deterministic `reports/smoke_voice_filter.json` and `filtered_out/removed_segments.jsonl` files.
+
+Filter-only pass criteria are explicit:
+- `voice.wav` must be accepted.
+- `music.wav` and `silence.wav` must be rejected.
+- `mixed.wav` must be rejected with an explicit non-voice reason.
 
 Control fallback behavior with:
 

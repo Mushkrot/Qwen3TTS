@@ -41,7 +41,8 @@ patches/                      Tracked local patches for ignored upstream code
 Voice filtering is part of dataset construction, before ASR:
 
 - default mode is `--voice_filter_mode silero`;
-- current implementation uses WebRTC-VAD when available and ffmpeg silencedetect fallback for `silero`/`vad`/`hybrid`;
+- current implementation uses local Silero VAD first, WebRTC-VAD when installed, and a conservative ffmpeg
+  silencedetect fallback only when the model-based VAD path is unavailable;
 - strict mode requires full speech coverage unless overridden;
 - rejected spans are written to quarantine outputs when enabled.
 

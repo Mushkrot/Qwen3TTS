@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -21,6 +22,7 @@ class VoiceRegion:
 
 _VAD_FRAME_MS = 30
 _PCM_BYTES_PER_SAMPLE = 2
+_SILERO_CACHE: tuple[object, tuple[object, ...]] | None = None
 
 
 def _run_command(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -133,6 +135,111 @@ def _decode_audio_to_pcm16(audio_path: Path, sample_rate: int) -> tuple[bytes, i
     return raw, sample_count
 
 
+def _decode_audio_to_float_tensor(audio_path: Path, sample_rate: int):
+    raw, _sample_count = _decode_audio_to_pcm16(audio_path, sample_rate=sample_rate)
+    try:
+        import torch
+    except Exception as exc:  # pragma: no cover - optional runtime dependency
+        raise RuntimeError("torch is not installed; Silero VAD is unavailable") from exc
+
+    pcm = torch.frombuffer(bytearray(raw), dtype=torch.int16).clone()
+    return pcm.to(dtype=torch.float32) / 32768.0
+
+
+def _silero_candidate_dirs() -> list[Path]:
+    candidates: list[Path] = []
+    env_path = os.environ.get("QWEN3TTS_SILERO_VAD_DIR")
+    if env_path:
+        candidates.append(Path(env_path).expanduser())
+
+    torch_home = os.environ.get("TORCH_HOME")
+    if torch_home:
+        candidates.append(Path(torch_home).expanduser() / "hub" / "snakers4_silero-vad_master")
+
+    candidates.extend(
+        [
+            Path("/ai/models/torch_cache/hub/snakers4_silero-vad_master"),
+            Path("/root/.cache/torch/hub/snakers4_silero-vad_master"),
+        ]
+    )
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key not in seen:
+            unique.append(candidate)
+            seen.add(key)
+    return unique
+
+
+def _load_silero_vad() -> tuple[object, tuple[object, ...]]:
+    global _SILERO_CACHE
+    if _SILERO_CACHE is not None:
+        return _SILERO_CACHE
+
+    try:
+        import torch
+    except Exception as exc:  # pragma: no cover - optional runtime dependency
+        raise RuntimeError("torch is not installed; Silero VAD is unavailable") from exc
+
+    load_errors: list[str] = []
+    for candidate in _silero_candidate_dirs():
+        if not candidate.exists():
+            continue
+        try:
+            model, utils = torch.hub.load(
+                str(candidate),
+                "silero_vad",
+                source="local",
+                trust_repo=True,
+                force_reload=False,
+            )
+            _SILERO_CACHE = (model, tuple(utils))
+            return _SILERO_CACHE
+        except Exception as exc:  # pragma: no cover - depends on local model cache
+            load_errors.append(f"{candidate}: {exc}")
+
+    searched = ", ".join(str(p) for p in _silero_candidate_dirs())
+    details = "; ".join(load_errors)
+    if details:
+        raise RuntimeError(f"local Silero VAD failed to load ({details})")
+    raise RuntimeError(f"local Silero VAD model cache not found; searched: {searched}")
+
+
+def _detect_with_silero_vad(
+    audio_path: Path,
+    *,
+    min_speech_ms: int,
+    min_silence_ms: int,
+    sample_rate: int,
+) -> list[VoiceRegion]:
+    model, utils = _load_silero_vad()
+    get_speech_timestamps = utils[0]
+
+    wav = _decode_audio_to_float_tensor(audio_path, sample_rate=sample_rate)
+    speech_timestamps = get_speech_timestamps(
+        wav,
+        model,
+        sampling_rate=sample_rate,
+        min_speech_duration_ms=min_speech_ms,
+        min_silence_duration_ms=min_silence_ms,
+        speech_pad_ms=min(100, max(0, min_silence_ms // 2)),
+        return_seconds=True,
+    )
+
+    regions: list[VoiceRegion] = []
+    for item in speech_timestamps:
+        try:
+            start = float(item["start"])
+            end = float(item["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if end > start:
+            regions.append(VoiceRegion(start, end))
+    return regions
+
+
 def _detect_with_webrtcvad(
     audio_path: Path,
     *,
@@ -221,7 +328,9 @@ def _voice_from_silence(audio_path: Path, silence_regions: list[tuple[float, flo
         return []
 
     if not silence_regions:
-        return [VoiceRegion(0.0, total_sec)]
+        # Energy-only fallback cannot distinguish continuous music/noise from speech.
+        # Keep this conservative so uncertain sources are rejected by the builder.
+        return []
 
     silence_sorted = sorted(silence_regions, key=lambda v: v[0])
     merged: list[tuple[float, float]] = []
@@ -324,7 +433,7 @@ def detect_voice_regions(
         raise ValueError(f"unsupported voice backend '{backend}'")
 
     if mode in {"silero", "vad", "hybrid"}:
-        detectors = [_detect_with_webrtcvad, _detect_with_silencedetect]
+        detectors = [_detect_with_silero_vad, _detect_with_webrtcvad, _detect_with_silencedetect]
     else:
         detectors = [_detect_with_fallback]
 
@@ -350,7 +459,7 @@ def detect_voice_regions(
                     sample_rate=sample_rate,
                 )  # type: ignore[misc]
             last_error = None
-            if detected:
+            if detected or detector in {_detect_with_silero_vad, _detect_with_webrtcvad}:
                 break
         except Exception as exc:  # pragma: no cover - backend-specific failure path
             last_error = exc
