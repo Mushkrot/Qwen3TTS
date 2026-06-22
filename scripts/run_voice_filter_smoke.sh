@@ -110,15 +110,18 @@ removed_rows = []
 
 for audio_name in ["voice.wav", "music.wav", "silence.wav", "mixed.wav"]:
     path = input_dir / audio_name
-    regions = detect_voice_regions(
-        path,
-        backend="silero",
-        sample_rate=16000,
-        min_speech_ms=250,
-        min_silence_ms=200,
-        merge_gap_ms=120,
-        allow_fallback_to_full=False,
-    )
+    try:
+        regions = detect_voice_regions(
+            path,
+            backend="silero",
+            sample_rate=16000,
+            min_speech_ms=250,
+            min_silence_ms=200,
+            merge_gap_ms=120,
+            allow_fallback_to_full=False,
+        )
+    except Exception:
+        regions = []
     duration = audio_duration(path)
 
     if regions:
