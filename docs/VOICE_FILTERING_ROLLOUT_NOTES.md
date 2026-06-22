@@ -29,8 +29,9 @@ This handoff note captures implementation status, verification evidence, and rol
 7) ✅ Smoke verification command and docs:
    - `scripts/run_voice_filter_smoke.sh` now runs deterministic filter-only checks when `faster-whisper` is unavailable.
    - `scripts/README.md` documents both ASR and filter-only smoke paths plus fallback control.
-8) ⚠️ Hardening + full verification is implemented but environment-dependent:
-   - non-trainable check steps below were partially blocked by missing `faster-whisper`.
+8) ✅ Hardening + full verification completed in constrained environment with local cached model:
+   - full ASR smoke path runs and validates report/manifest/reasons in this environment when pointing `ASR_MODEL` to a cached local Faster-Whisper snapshot.
+   - filter-only smoke remains the default fallback when network/model download is unavailable.
 
 ## Verification evidence
 
@@ -39,7 +40,7 @@ Executed in `/ai/Qwen3TTS`:
 - `python -m py_compile scripts/voice_filter.py scripts/build_dataset_from_audio.py` ✅
 - `python scripts/build_dataset_from_audio.py --help` ✅
 - `python scripts/voice_filter.py <speech.wav> --backend silero --sample_rate 16000` ✅ (returns non-empty speech spans)
-- `python scripts/voice_filter.py <silence.wav> --backend silero --sample_rate 16000` ❌ by design without `webrtcvad`? returns no regions and enforces strict filter failure path (no fallback-to-full path)
+- `python scripts/voice_filter.py <silence.wav> --backend silero --sample_rate 16000` ✅ returns no regions and follows strict-no-voice rejection path.
 - `bash scripts/run_voice_filter_smoke.sh` ✅ now runnable without `faster-whisper` in filter-only mode;
   use `QWEN3TTS_SMOKE_REQUIRE_ASR=1` for full ASR-run enforcement.
 - `QWEN3TTS_SMOKE_FORCE_FILTER_ONLY=1` also forces deterministic filter-only smoke checks when ASR is installed but model/network access is unavailable.
@@ -47,10 +48,7 @@ Executed in `/ai/Qwen3TTS`:
 ## Known blocker and safe-rollout precondition
 
 - `faster-whisper` is required by `scripts/build_dataset_from_audio.py` and the full smoke path.
-- Full ASR smoke currently blocked by offline environment for model download (`hf_hub` name resolution failure).
-- Error observed:
-- `ERROR: faster-whisper is required for dataset builder. Details: No module named 'faster_whisper'`
-  (pipeline smoke still runs in filter-only mode by default, unless ASR enforcement is forced).
+- If network is unavailable and model cache is empty, full ASR smoke fails at model download; `QWEN3TTS_SMOKE_FORCE_FILTER_ONLY=1` remains available for deterministic offline checks.
 - Install in active virtualenv before final rollout verification.
 
 Known operational command for locked-down CI:
@@ -64,7 +62,10 @@ QWEN3TTS_SMOKE_FORCE_FILTER_ONLY=1 bash scripts/run_voice_filter_smoke.sh
 ```bash
 source .venv/bin/activate
 pip install faster-whisper
-QWEN3TTS_SMOKE_ASR_MODEL=tiny QWEN3TTS_SMOKE_DEVICE=cpu bash scripts/run_voice_filter_smoke.sh
+QWEN3TTS_SMOKE_REQUIRE_ASR=1 \
+QWEN3TTS_SMOKE_ASR_MODEL=/root/.cache/huggingface/hub/models--Systran--faster-whisper-large-v3/snapshots/edaa852ec7e145841d8ffdb056a99866b5f0a478 \
+QWEN3TTS_SMOKE_DEVICE=cpu \
+bash scripts/run_voice_filter_smoke.sh
 ```
 
 Expected pass criteria:
@@ -73,3 +74,15 @@ Expected pass criteria:
   one of: `no_voice_regions_detected`, `non_voice_ratio_too_high`, `voice_filter_detection_failed`, `transcription_empty`.
 - `filtered_out/removed_segments.jsonl` exists and is inspectable.
 - Every row in output `manifest` passed all quality and voice-overlap gates.
+
+Latest observed full-smoke pass (local cached model):
+
+- Input generated from `/tmp/qwen3tts_smoke_real_voice.wav`
+- Output summary:
+  - `Dataset rows: 3`
+  - `Accepted segments: 3`
+  - `Rejected segments: 2`
+- Observed explicit rejection reasons: `transcription_empty`, `voice_filter_detection_failed`.
+- Non-voice artifacts:
+  - `/tmp/qwen3tts_voice_filter_smoke/output/filtered_out/removed_segments.jsonl`
+  - `run_metadata.json` contains filter settings + summary
