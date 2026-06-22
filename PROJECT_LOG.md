@@ -2,9 +2,9 @@
 
 ## Current Session
 
-Status: Implemented and committed 56dc731. Default voice_filter_mode silero now loads local Silero VAD from /ai/models/torch_cache/hub/snakers4_silero-vad_master using project ffmpeg PCM decoding; ffmpeg silencedetect fallback is conservative; smoke uses .venv/bin/python and explicitly asserts speech accepted, music rejected, silence rejected, mixed rejected. Tracked tree is clean except ignored local artifacts/raw Baritone Input audio.
-Current focus: Qwen3TTS dataset voice-filtering audit and external ASR inventory after recovery
-Next step: If continuing dataset work, build a real Ready dataset with --voice_filter_mode silero --strict_mode and inspect quality_report plus filtered_out quarantine before training.
+Status: Committed 936d7fe. Added --voice_filter_reject_initial_seconds and initial_window_rejected so audiobook/title intro speech-over-music can be excluded from manifests. Trial Ready outputs and /tmp preview inputs were deleted. Tracked tree was clean after commit except ignored raw Input audio and local env artifacts.
+Current focus: Qwen3TTS dataset cleanup after intro music was found in first accepted chunk
+Next step: For the next real Baritone dataset build, use --voice_filter_mode silero --strict_mode --voice_filter_reject_initial_seconds 30, then inspect quality_report for initial_window_rejected and spot-check accepted chunks before training.
 
 ## Active Constraints
 
@@ -14,7 +14,7 @@ Next step: If continuing dataset work, build a real Ready dataset with --voice_f
 
 ## Open Questions
 
-- Whether to install WhisperX into the Qwen3TTS .venv for better word boundary alignment before production dataset builds.
+- Whether a stronger music-under-speech detector/source-separation dependency should be added later for non-intro background music cases.
 
 ## Recallant
 
