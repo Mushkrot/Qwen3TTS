@@ -11,6 +11,12 @@ BATCH_SIZE="${BATCH_SIZE:-2}"
 LR="${LR:-2e-5}"
 NUM_EPOCHS="${NUM_EPOCHS:-3}"
 
+if [ ! -f "${ROOT_DIR}/.venv/bin/activate" ]; then
+  echo "ERROR: missing virtualenv: ${ROOT_DIR}/.venv"
+  echo "Create it with: python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
+  exit 1
+fi
+
 source "${ROOT_DIR}/.venv/bin/activate"
 
 python "${ROOT_DIR}/external/Qwen3-TTS/finetuning/sft_12hz.py" \

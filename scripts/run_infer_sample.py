@@ -6,10 +6,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import soundfile as sf
-import torch
-from qwen_tts import Qwen3TTSModel
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -30,6 +26,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+
+    import soundfile as sf
+    import torch
+    from qwen_tts import Qwen3TTSModel
+
     output_path = Path(args.output_wav)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 

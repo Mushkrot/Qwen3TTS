@@ -7,8 +7,13 @@ Use the same phrase set and scoring rubric for every run to keep decisions repro
 
 ## Frozen production candidate
 
-Current reference checkpoint:
+Historical reference checkpoint from previous status notes:
 - `experiments/qwen3_ru_en_speaker_v1/runs/sft_1_7b_smoke1/checkpoint-epoch-0`
+
+Current 2026-06-22 filesystem state:
+- that checkpoint is not present in the working tree;
+- `experiments/qwen3_ru_en_speaker_v1/runs/` and `samples/` currently contain only tracked scaffolds;
+- restore the historical checkpoint/sample artifacts from backup, or regenerate them, before running this evaluation protocol.
 
 ## Fixed English phrase set
 

@@ -40,6 +40,7 @@ Strict mode (`strict` / `--strict_mode`) keeps pre-ASR filtering on and uses `--
 `voice_filter` runs detectors in strict order:
 
 - `silero`/`vad`/`hybrid`: WebRTC-VAD (if installed), then ffmpeg silencedetect fallback.
+  The mode names are compatibility/API labels; current local implementation does not require a separate Silero model package.
 - `whisper`/`whisper_only`: strict fallback path (`detection_failed` if detector unavailable).
 - if all fallbacks fail and full fallback is disabled, the source file is rejected.
 
@@ -97,6 +98,12 @@ When enabled, filtered-out spans are written to:
 - `reason`
 
 Optional snippets are stored under `filtered_out/snippets/` when `--voice_filter_export_quarantine_snippets` is set.
+
+## Storage policy
+
+Raw source audio in `datasets/voices/**/Input/` and generated builder output in
+`datasets/voices/**/Ready/` are local working assets and must not be committed.
+The repository tracks only scaffolds, docs, code, templates, and small reproducible metadata.
 
 ## Compatibility
 

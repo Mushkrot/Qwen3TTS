@@ -55,6 +55,8 @@ Notes:
 - Keep manifest files in `experiments/.../manifests/`.
 - Keep generated sample WAVs in `experiments/.../samples/`.
 - Do not store secrets in repo.
+- Do not commit raw `datasets/voices/**/Input/` audio or generated `Ready/` outputs.
+- Track only scaffolds, small templates, docs, code, and reproducible patches.
 
 ---
 
@@ -149,22 +151,28 @@ Track per run:
 
 ## 8) Immediate next step
 
-Proceed with dataset handoff and execute **Phase C (Preprocessing and code extraction)** using:
+Proceed with current-state freeze and then execute **Phase C (Preprocessing and code extraction)** using:
 - `docs/DATASET_CONTRACT.md`
 - `scripts/README.md`
+- `docs/RUNBOOK.md`
 
 ---
 
-## 9) Execution status snapshot
+## 9) Execution status snapshot (2026-06-22)
 
 Phase A progress:
-- Completed: venv setup, dependency installation, upstream finetuning repo clone, CUDA/runtime checks.
-- Completed: baseline model/tokenizer downloaded for 0.6B track.
-- Open blockers: missing system `sox`; optional `flash-attn` build failure due CUDA toolchain mismatch.
+- Completed now: `.venv` recreated, dependency installation, upstream finetuning repo clone, CUDA/runtime import checks.
+- Current `torch` import sees CUDA.
+- `sox` and `ffmpeg` are installed.
+- Open blocker: optional `flash-attn` remains unresolved; default local patch uses `sdpa`.
 
 Phase B progress:
 - Completed: dataset contract and manifest template.
 - Completed: helper scripts for validate/prepare/train/infer.
+- Completed: voice filtering before ASR, quarantine outputs, strict/off compatibility controls.
+- Completed: artifact policy that keeps raw `Input/` audio and generated outputs out of Git.
 
 Current active target:
-- Run first real `train_raw.jsonl` validation and `prepare_data.py` execution.
+- Commit the restored current state.
+- Build a fresh Baritone `Ready/<run_name>` dataset with music/noise/non-speech filtering enabled.
+- Validate `train_raw.jsonl` and then run `prepare_data.py`.

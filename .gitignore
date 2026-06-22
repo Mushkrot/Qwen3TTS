@@ -209,3 +209,14 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 .recallant/
+
+# Project-local raw/generated audio assets.
+# Keep folder scaffolds in git, but keep large/private media out of normal commits.
+datasets/voices/**/Input/*
+!datasets/voices/**/Input/.gitkeep
+datasets/voices/**/Ready/*
+!datasets/voices/**/Ready/.gitkeep
+experiments/qwen3_ru_en_speaker_v1/runs/*
+!experiments/qwen3_ru_en_speaker_v1/runs/.gitkeep
+experiments/qwen3_ru_en_speaker_v1/samples/*
+!experiments/qwen3_ru_en_speaker_v1/samples/.gitkeep

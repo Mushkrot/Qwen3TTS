@@ -8,6 +8,12 @@ OUTPUT_JSONL="${2:-${ROOT_DIR}/experiments/qwen3_ru_en_speaker_v1/manifests/trai
 DEVICE="${DEVICE:-cuda:0}"
 TOKENIZER_MODEL_PATH="${TOKENIZER_MODEL_PATH:-Qwen/Qwen3-TTS-Tokenizer-12Hz}"
 
+if [ ! -f "${ROOT_DIR}/.venv/bin/activate" ]; then
+  echo "ERROR: missing virtualenv: ${ROOT_DIR}/.venv"
+  echo "Create it with: python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
+  exit 1
+fi
+
 source "${ROOT_DIR}/.venv/bin/activate"
 python "${ROOT_DIR}/scripts/validate_manifest.py" --input_jsonl "${INPUT_JSONL}"
 

@@ -32,6 +32,10 @@ This handoff note captures implementation status, verification evidence, and rol
 8) ✅ Hardening + full verification completed in constrained environment with local cached model:
    - full ASR smoke path runs and validates report/manifest/reasons in this environment when pointing `ASR_MODEL` to a cached local Faster-Whisper snapshot.
    - filter-only smoke remains the default fallback when network/model download is unavailable.
+9) ✅ Current-state hardening after folder-restoration incident:
+   - `datasets/voices/**/Input/*` and `Ready/*` are ignored while `.gitkeep` scaffolds stay tracked.
+   - `scripts/run_voice_filter_smoke.sh` falls back to local Baritone input in filter-only mode unless full ASR is explicitly required.
+   - local upstream SFT runtime patch is tracked in `patches/qwen3-tts-sft-runtime-local-model.patch`.
 
 ## Verification evidence
 
@@ -45,6 +49,15 @@ Executed in `/ai/Qwen3TTS`:
   use `QWEN3TTS_SMOKE_REQUIRE_ASR=1` for full ASR-run enforcement.
 - `QWEN3TTS_SMOKE_FORCE_FILTER_ONLY=1` also forces deterministic filter-only smoke checks when ASR is installed but model/network access is unavailable.
 
+Latest 2026-06-22 verification after recovery:
+
+- `.venv` recreated and `requirements.txt` installed.
+- `torch` imports with CUDA visible.
+- `soundfile`, `faster_whisper`, and `qwen_tts` import.
+- `python scripts/run_infer_sample.py --help` works without importing heavy runtime dependencies before argparse.
+- `bash scripts/run_voice_filter_smoke.sh` passes by using local Baritone input in filter-only mode.
+- `QWEN3TTS_SMOKE_REQUIRE_ASR=1 ... bash scripts/run_voice_filter_smoke.sh` against the local Baritone fallback can still fail with `ERROR: no dataset rows produced`; use a known-good short speech fixture for full ASR smoke.
+
 ## Known blocker and safe-rollout precondition
 
 - `faster-whisper` is required by `scripts/build_dataset_from_audio.py` and the full smoke path.
@@ -57,6 +70,15 @@ Known operational command for locked-down CI:
 QWEN3TTS_SMOKE_FORCE_FILTER_ONLY=1 bash scripts/run_voice_filter_smoke.sh
 ```
 
+Known operational command for this local checkout when the historical smoke sample is absent:
+
+```bash
+source .venv/bin/activate
+bash scripts/run_voice_filter_smoke.sh
+```
+
+The script reports that it is using local Baritone source and runs filter-only checks.
+
 ## Final rollout command sequence
 
 ```bash
@@ -64,6 +86,18 @@ source .venv/bin/activate
 pip install faster-whisper
 QWEN3TTS_SMOKE_REQUIRE_ASR=1 \
 QWEN3TTS_SMOKE_ASR_MODEL=/root/.cache/huggingface/hub/models--Systran--faster-whisper-large-v3/snapshots/edaa852ec7e145841d8ffdb056a99866b5f0a478 \
+QWEN3TTS_SMOKE_DEVICE=cpu \
+bash scripts/run_voice_filter_smoke.sh
+```
+
+For full ASR smoke, prefer an explicit short speech fixture:
+
+```bash
+source .venv/bin/activate
+QWEN3TTS_SMOKE_REQUIRE_ASR=1 \
+QWEN3TTS_SMOKE_VOICE_SOURCE=/path/to/known-short-speech.wav \
+QWEN3TTS_SMOKE_LANGUAGE=ru \
+QWEN3TTS_SMOKE_ASR_MODEL=tiny \
 QWEN3TTS_SMOKE_DEVICE=cpu \
 bash scripts/run_voice_filter_smoke.sh
 ```

@@ -14,8 +14,9 @@ datasets/
 
 - `Input/` contains raw source recordings for that voice.
 - `Ready/` contains dataset-builder outputs for that voice.
+- Contents of `Input/` and `Ready/` are ignored local working assets and are not committed.
+- Only scaffolds (`.gitkeep`) and small documentation/metadata files belong in Git.
 
 Use this workspace only inside `/ai/Qwen3TTS`. The separate `/ai/whisper1`
 project is an external transcription tool/source and is not the Qwen3TTS
 dataset home.
-

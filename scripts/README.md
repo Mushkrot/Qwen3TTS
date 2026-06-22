@@ -18,6 +18,11 @@ Write generated output for the same voice under:
 datasets/voices/<VoiceName>/Ready/<run_name>
 ```
 
+Storage rule:
+- raw files in `Input/` are ignored local assets and must not be committed;
+- generated files in `Ready/` are ignored working outputs unless a small metadata file is intentionally promoted;
+- folder scaffolds and README/policy files are tracked.
+
 Example for the current Baritone voice:
 
 ```bash
@@ -101,12 +106,15 @@ Run the smoke command to validate non-voice filtering behavior on a synthetic in
 
 ```bash
 source .venv/bin/activate
-QWEN3TTS_SMOKE_ASR_MODEL=tiny QWEN3TTS_SMOKE_DEVICE=cpu bash scripts/run_voice_filter_smoke.sh
+bash scripts/run_voice_filter_smoke.sh
 ```
 
-If `faster-whisper` is installed, the smoke runs full dataset creation and ASR-based rejection checks.
-If it is missing, the command falls back to a filter-only smoke mode and still writes deterministic
-`reports/smoke_voice_filter.json` and `filtered_out/removed_segments.jsonl` files.
+If the historical frozen smoke sample is missing but local Baritone input exists, the command uses
+`datasets/voices/Baritone/Input/Baritone1.mp3` and runs filter-only smoke by default. This avoids
+treating arbitrary raw source audio as a stable ASR fixture while still validating non-voice rejection.
+
+If `faster-whisper` is missing, the command also falls back to filter-only smoke and still writes
+deterministic `reports/smoke_voice_filter.json` and `filtered_out/removed_segments.jsonl` files.
 
 Control fallback behavior with:
 
@@ -114,7 +122,20 @@ Control fallback behavior with:
 QWEN3TTS_SMOKE_REQUIRE_ASR=1 bash scripts/run_voice_filter_smoke.sh
 ```
 
-If `QWEN3TTS_SMOKE_REQUIRE_ASR=1`, the command exits with error when `faster-whisper` is absent.
+If `QWEN3TTS_SMOKE_REQUIRE_ASR=1`, the command exits with error when `faster-whisper` is absent or
+when the chosen source does not produce accepted ASR rows.
+
+Use a known-good short speech source for full ASR smoke:
+
+```bash
+source .venv/bin/activate
+QWEN3TTS_SMOKE_REQUIRE_ASR=1 \
+QWEN3TTS_SMOKE_VOICE_SOURCE=/path/to/known-short-speech.wav \
+QWEN3TTS_SMOKE_LANGUAGE=ru \
+QWEN3TTS_SMOKE_ASR_MODEL=tiny \
+QWEN3TTS_SMOKE_DEVICE=cpu \
+bash scripts/run_voice_filter_smoke.sh
+```
 
 Use offline-only mode when ASR dependencies/models are not reachable:
 
@@ -136,6 +157,8 @@ Expected output:
 source .venv/bin/activate
 python scripts/validate_manifest.py --input_jsonl experiments/qwen3_ru_en_speaker_v1/manifests/train_raw.jsonl
 ```
+
+Current state: `train_raw.jsonl` is not present until a dataset build or manual manifest handoff creates it.
 
 ## Preprocess (`audio_codes`)
 
@@ -164,3 +187,4 @@ python scripts/run_infer_sample.py \
 ```
 
 Note: if `flash-attn` is not installed, switch `attn_implementation` in `run_infer_sample.py` to an implementation supported by your runtime.
+Current default is `sdpa`.

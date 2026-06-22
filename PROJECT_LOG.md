@@ -2,9 +2,9 @@
 
 ## Current Session
 
-Status: attached to Recallant.
-Current focus: Recallant-backed project work.
-Next step: start the next agent session with `recallant agent-start --task-hint "<current task>"`.
+Status: Remediation complete: runtime .venv restored, input audio ignored, docs updated, code smoke/hardening fixes verified, ready to stage and commit code/docs/config/patches only
+Current focus: Qwen3TTS restored-state freeze and commit preparation
+Next step: Stage code/docs/.codex config/patches/lock/scaffolds; ensure raw Input audio remains ignored; commit current safe project state before new measurement work
 
 ## Active Constraints
 
@@ -14,7 +14,9 @@ Next step: start the next agent session with `recallant agent-start --task-hint 
 
 ## Open Questions
 
-- None recorded.
+- Should historical checkpoint/sample artifacts be restored from backup or regenerated from the current Baritone dataset?
+- Should full ASR smoke get a tiny tracked synthetic/known-good speech fixture, or stay fixture-explicit?
+- Should .git tmp_pack garbage be cleaned in a separate maintenance step after explicit owner approval?
 
 ## Recallant
 

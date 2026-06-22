@@ -21,14 +21,51 @@ Reference docs:
 - Primary stack: Qwen3-TTS.
 - Active training track: `Qwen/Qwen3-TTS-12Hz-1.7B-Base`.
 - `0.6B` currently in separate debug track due shape mismatch in upstream fine-tuning script.
-- Current best checkpoint for product goals: `runs/sft_1_7b_smoke1/checkpoint-epoch-0`.
+- Historical best checkpoint for product goals: `runs/sft_1_7b_smoke1/checkpoint-epoch-0`.
+- Current filesystem state: historical run/sample artifacts are not present in `experiments/`.
 - Training policy: early stopping after first epoch unless listening tests clearly improve naturalness.
+- Raw source audio in `datasets/voices/**/Input/` is never committed.
+- Commit code, docs, scaffolds, small config, and reproducible patches only.
 
 ---
 
-## Progress snapshot
+## Current verified state (2026-06-22)
 
-### Completed
+### Working
+
+- Tracked repository scaffold is intact.
+- Dataset voice folders are restored and tracked through `.gitkeep` files:
+  - `datasets/voices/Dima/{Input,Ready}`
+  - `datasets/voices/Baritone/{Input,Ready}`
+- Local Baritone source audio exists under ignored `datasets/voices/Baritone/Input/`.
+- `.venv` has been recreated.
+- Runtime imports pass:
+  - `torch` imports and CUDA is visible;
+  - `qwen_tts` imports with the expected optional `flash-attn` warning;
+  - `soundfile` imports;
+  - `faster_whisper` imports.
+- Static checks pass:
+  - `python -m compileall -q scripts external/Qwen3-TTS/finetuning external/Qwen3-TTS/qwen_tts`
+  - `bash -n scripts/run_prepare_data.sh scripts/run_sft_0_6b.sh scripts/run_voice_filter_smoke.sh`
+- Default local smoke passes:
+  - `bash scripts/run_voice_filter_smoke.sh`
+  - current fallback uses local Baritone input and runs filter-only smoke unless full ASR is explicitly required.
+
+### Not restored / not ready
+
+- `experiments/qwen3_ru_en_speaker_v1/runs/` contains only scaffold, no restored checkpoint.
+- `experiments/qwen3_ru_en_speaker_v1/samples/` contains only scaffold, no restored sample pack.
+- `experiments/qwen3_ru_en_speaker_v1/manifests/train_raw.jsonl` is not present.
+- Full ASR smoke with current local Baritone fallback is not a stable fixture and can produce `ERROR: no dataset rows produced`.
+- `.git/objects/pack/` contains old `tmp_pack_*` garbage files from a previous interrupted Git operation; do not clean them without a deliberate recovery/backup decision.
+
+---
+
+## Historical progress snapshot
+
+These items describe prior project history and may refer to generated artifacts that are not currently present in the working tree.
+
+### Completed historically
 - Repository initialized at `/ai/Qwen3TTS`.
 - Initial planning doc created.
 - Setup guide created.
@@ -59,17 +96,18 @@ Reference docs:
 - Separate debug track for 0.6B shape mismatch.
 
 ### Pending
-- No blocking pending items for current stage; production candidate is frozen.
+- Restore or regenerate the manifest/checkpoint/sample artifacts before any new evaluation.
+- Build a fresh Baritone dataset with current voice-filtering rules.
 
 ---
 
 ## Runbook for a new developer
 
-1. Read `docs/QWEN3TTS_IMPLEMENTATION_PLAN.md`.
-2. Execute `docs/QWEN3TTS_SETUP.md` step-by-step.
+1. Read `README.md`, `docs/ARTIFACT_POLICY.md`, and `docs/RUNBOOK.md`.
+2. Confirm `git status --ignored --short` does not show raw `Input/` audio as untracked stage candidates.
 3. Confirm runtime checks pass.
-4. Continue with dataset handoff checklist and preprocessing stage.
-5. Use `scripts/README.md` for command-level run helpers.
+4. Continue with dataset handoff/build checklist and preprocessing stage.
+5. Use `scripts/README.md` for command-level helpers.
 
 ---
 
@@ -81,8 +119,10 @@ Reference docs:
 
 ## Known blockers
 
-1. Optional `flash-attn` installation failed due CUDA mismatch (`13.0` detected vs torch CUDA `12.8`).
+1. Optional `flash-attn` remains unresolved and has not been revalidated after the 2026-06-22 environment rebuild.
 2. `0.6B` fine-tune path currently fails with embedding shape mismatch in upstream script.
+3. Historical checkpoint/sample artifacts are not present in this checkout.
+4. Current full ASR smoke requires a known-good speech fixture; raw Baritone fallback is validated only through filter-only smoke by default.
 
 ---
 
@@ -93,6 +133,7 @@ Update this file immediately after:
 
 ## Immediate next action
 
-1. Keep current production candidate as baseline checkpoint.
-2. Pause model-training iterations for this dataset snapshot.
-3. Prepare dataset-quality improvements before the next training cycle.
+1. Commit the restored code/docs/scaffold/policy state.
+2. Build a fresh dataset under `datasets/voices/Baritone/Ready/<run_name>`.
+3. Review quarantine/report output to confirm music/noise/non-speech rejection.
+4. Restore or regenerate checkpoints/samples before measuring model quality.

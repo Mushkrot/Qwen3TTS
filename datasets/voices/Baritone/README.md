@@ -10,3 +10,5 @@ Baritone/
   `Baritone1.mp3`, `Baritone2.mp3`, `Baritone3.mp3`.
 - `Ready/`: processed dataset-builder outputs for the Baritone voice.
 
+The MP3 source files are local working inputs. They are intentionally ignored by
+Git because the originals are stored outside this repository.

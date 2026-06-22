@@ -8,9 +8,35 @@ OUTPUT_DIR="$TMP_DIR/output"
 REQUIRE_ASR="${QWEN3TTS_SMOKE_REQUIRE_ASR:-0}"
 FORCE_FILTER_ONLY="${QWEN3TTS_SMOKE_FORCE_FILTER_ONLY:-0}"
 
-VOICE_SOURCE="${QWEN3TTS_SMOKE_VOICE_SOURCE:-${ROOT_DIR}/experiments/qwen3_ru_en_speaker_v1/samples/smoke_1_7b_epoch0_en.wav}"
+DEFAULT_VOICE_SOURCE="${ROOT_DIR}/experiments/qwen3_ru_en_speaker_v1/samples/smoke_1_7b_epoch0_en.wav"
+LOCAL_BARITONE_SOURCE="${ROOT_DIR}/datasets/voices/Baritone/Input/Baritone1.mp3"
+
+if [ -n "${QWEN3TTS_SMOKE_VOICE_SOURCE:-}" ]; then
+  VOICE_SOURCE="$QWEN3TTS_SMOKE_VOICE_SOURCE"
+  VOICE_SOURCE_KIND="custom"
+elif [ -f "$DEFAULT_VOICE_SOURCE" ]; then
+  VOICE_SOURCE="$DEFAULT_VOICE_SOURCE"
+  VOICE_SOURCE_KIND="default_sample"
+elif [ -f "$LOCAL_BARITONE_SOURCE" ]; then
+  VOICE_SOURCE="$LOCAL_BARITONE_SOURCE"
+  VOICE_SOURCE_KIND="local_baritone"
+else
+  VOICE_SOURCE="$DEFAULT_VOICE_SOURCE"
+  VOICE_SOURCE_KIND="missing_default"
+fi
+
 ASR_MODEL="${QWEN3TTS_SMOKE_ASR_MODEL:-tiny}"
 ASR_DEVICE="${QWEN3TTS_SMOKE_DEVICE:-cpu}"
+ASR_LANGUAGE="${QWEN3TTS_SMOKE_LANGUAGE:-en}"
+
+if [ "$VOICE_SOURCE_KIND" = "local_baritone" ] && [ -z "${QWEN3TTS_SMOKE_LANGUAGE:-}" ]; then
+  ASR_LANGUAGE="ru"
+fi
+
+if [ "$VOICE_SOURCE_KIND" = "local_baritone" ] && [ "$REQUIRE_ASR" != "1" ] && [ "$FORCE_FILTER_ONLY" != "1" ]; then
+  echo "[smoke] using local Baritone source; running filter-only smoke unless QWEN3TTS_SMOKE_REQUIRE_ASR=1 is set."
+  FORCE_FILTER_ONLY="1"
+fi
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
   echo "ERROR: ffmpeg is required for smoke script."
@@ -206,7 +232,7 @@ fi
 python "$ROOT_DIR/scripts/build_dataset_from_audio.py" \
   --input_dir "$INPUT_DIR" \
   --output_root "$OUTPUT_DIR" \
-  --language en \
+  --language "$ASR_LANGUAGE" \
   --asr_model "$ASR_MODEL" \
   --device "$ASR_DEVICE" \
   --compute_type int8 \
