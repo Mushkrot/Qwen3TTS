@@ -349,6 +349,7 @@ def detect_voice_regions(
                     min_silence_ms=min_silence_ms,
                     sample_rate=sample_rate,
                 )  # type: ignore[misc]
+            last_error = None
             if detected:
                 break
         except Exception as exc:  # pragma: no cover - backend-specific failure path
