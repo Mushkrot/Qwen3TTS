@@ -29,6 +29,35 @@ Recommendation:
 
 ---
 
+## 1.1) Project-local folder layout
+
+The Qwen3TTS dataset workspace lives inside this repository:
+
+```text
+datasets/
+  voices/
+    <VoiceName>/
+      Input/
+      Ready/
+```
+
+- `Input/`: raw source recordings for the voice.
+- `Ready/`: processed builder outputs for that voice.
+
+Current canonical voice folders:
+
+```text
+datasets/voices/Dima/Input
+datasets/voices/Dima/Ready
+datasets/voices/Baritone/Input
+datasets/voices/Baritone/Ready
+```
+
+`/ai/whisper1` is a separate project and must not be treated as the Qwen3TTS
+dataset workspace.
+
+---
+
 ## 2) Audio requirements
 
 - Format: WAV

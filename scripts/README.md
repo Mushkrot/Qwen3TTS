@@ -6,6 +6,36 @@ This folder contains helper scripts for Qwen3TTS training and dataset preparatio
 
 Build a dataset from raw audio files with pre-ASR voice filtering:
 
+Project-local voice inputs live under:
+
+```text
+datasets/voices/<VoiceName>/Input
+```
+
+Write generated output for the same voice under:
+
+```text
+datasets/voices/<VoiceName>/Ready/<run_name>
+```
+
+Example for the current Baritone voice:
+
+```bash
+source .venv/bin/activate
+python scripts/build_dataset_from_audio.py \
+  --input_dir datasets/voices/Baritone/Input \
+  --output_root datasets/voices/Baritone/Ready/build_strict \
+  --language ru \
+  --voice_filter_mode silero \
+  --strict_mode \
+  --voice_filter_export_quarantine \
+  --voice_filter_export_quarantine_snippets \
+  --validate_manifest
+```
+
+Do not use `/ai/whisper1` as the Qwen3TTS dataset home. That project is only an
+external transcription/source project when explicitly needed.
+
 ```bash
 source .venv/bin/activate
 python scripts/build_dataset_from_audio.py \
