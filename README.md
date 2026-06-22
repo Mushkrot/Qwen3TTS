@@ -20,6 +20,8 @@ Synchronization and dubbing pipeline orchestration are intentionally out of scop
 - Voice filtering policy: `docs/VOICE_FILTERING_POLICY.md`
 - Voice filtering rollout notes: `docs/VOICE_FILTERING_ROLLOUT_NOTES.md`
 - Evaluation protocol: `docs/EVAL_PHRASE_SET.md`
+- Checkpoint selection protocol: `docs/CHECKPOINT_SELECTION_PROTOCOL.md`
+- Candidate review report template: `docs/templates/CANDIDATE_REVIEW_REPORT.md`
 - Deep research context: `docs/VOICE_CLONING_DEEP_RESEARCH_SINCE_2025-09.md`
 - Historical audit context: `docs/VOICE_CLONING_PROJECTS_AUDIT_2026-02-21.md`
 
@@ -46,6 +48,10 @@ As of 2026-06-22:
 - Voice-filter smoke passes in default local mode by using the Baritone input as a filter-only source.
 - Full ASR smoke requires an explicit known-good short speech source; the current local Baritone fallback is not treated as a strict ASR fixture.
 - Historical checkpoints and sample packs named in older docs are not present in the working tree and must be restored from backup or regenerated before evaluation.
+- Project-local training orchestration is implemented for prepare-data,
+  epoch-by-epoch training, eval packs, automatic metrics, hard-reject gates,
+  and candidate manifests. Full automatic stopping and copied candidate WAV
+  export are still future work.
 
 ## Quick onboarding
 

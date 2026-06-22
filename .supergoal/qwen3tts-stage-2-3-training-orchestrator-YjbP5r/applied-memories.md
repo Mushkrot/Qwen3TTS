@@ -1,0 +1,4 @@
+- Recallant checkpoint: Stage 1 protocol docs are complete but uncommitted. Preserve those changes and build Stage 2/3 on top of `docs/CHECKPOINT_SELECTION_PROTOCOL.md` and `docs/templates/CANDIDATE_REVIEW_REPORT.md`.
+- Recallant memory: Qwen3TTS datasets live under `/ai/Qwen3TTS/datasets/voices/<Voice>/{Input,Ready}`; `/ai/whisper1` must not become the dataset home.
+- Recallant checkpoint: dataset purity remains a pre-training gate. The orchestrator must assume a ready/validated dataset and must not silently build from dirty raw audio.
+- Project docs: generated chunks, checkpoints, and sample WAVs are local working artifacts and must remain ignored/uncommitted.

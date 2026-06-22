@@ -1,0 +1,3 @@
+- Recallant checkpoint: dataset cleanup must remain a hard precondition for training; Baritone-style builds should use `--voice_filter_mode silero --strict_mode --voice_filter_reject_initial_seconds 30` and inspect `initial_window_rejected` before any SFT run.
+- Recallant memory: datasets live under `/ai/Qwen3TTS/datasets/voices/<Voice>/{Input,Ready}`; `/ai/whisper1` is external and must not become the dataset home.
+- Project memory/doc posture: canonical docs already include `docs/DATASET_CONTRACT.md`, `docs/EVAL_PHRASE_SET.md`, `docs/PROJECT_STATUS.md`, `docs/RUNBOOK.md`, and `docs/ARCHITECTURE.md`; this phase should extend that canon rather than create a parallel process.

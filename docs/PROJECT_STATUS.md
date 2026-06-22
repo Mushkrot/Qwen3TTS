@@ -23,7 +23,11 @@ Reference docs:
 - `0.6B` currently in separate debug track due shape mismatch in upstream fine-tuning script.
 - Historical best checkpoint for product goals: `runs/sft_1_7b_smoke1/checkpoint-epoch-0`.
 - Current filesystem state: historical run/sample artifacts are not present in `experiments/`.
-- Training policy: early stopping after first epoch unless listening tests clearly improve naturalness.
+- Training policy: use the documented semi-automatic candidate review protocol in
+  `docs/CHECKPOINT_SELECTION_PROTOCOL.md`; project-local orchestration now
+  supports epoch-by-epoch checkpoints, eval packs, automatic metrics,
+  hard-reject gates, and candidate manifests, but full automatic stopping and
+  copied candidate WAV export are not implemented yet.
 - Raw source audio in `datasets/voices/**/Input/` is never committed.
 - Commit code, docs, scaffolds, small config, and reproducible patches only.
 
@@ -108,6 +112,7 @@ These items describe prior project history and may refer to generated artifacts 
 3. Confirm runtime checks pass.
 4. Continue with dataset handoff/build checklist and preprocessing stage.
 5. Use `scripts/README.md` for command-level helpers.
+6. Use `docs/CHECKPOINT_SELECTION_PROTOCOL.md` before comparing training checkpoints.
 
 ---
 

@@ -5,6 +5,10 @@
 This document defines a fixed evaluation protocol for comparing Qwen3-TTS checkpoints.
 Use the same phrase set and scoring rubric for every run to keep decisions reproducible.
 
+Checkpoint selection and semi-automatic stopping rules are defined in
+`docs/CHECKPOINT_SELECTION_PROTOCOL.md`. This file remains the canonical fixed
+phrase and listening-score source used by that protocol.
+
 ## Frozen production candidate
 
 Historical reference checkpoint from previous status notes:
@@ -72,6 +76,10 @@ Selection policy:
 - Promote a new checkpoint only if it is not worse on naturalness and onset/offset quality.
 - If pronunciation improves but naturalness regresses, keep the older checkpoint.
 - Apply early stopping when later epochs start to degrade naturalness or pacing.
+- For semi-automatic candidate review, apply the hard gates, stopping defaults,
+  and top-candidate export rules in `docs/CHECKPOINT_SELECTION_PROTOCOL.md`.
+- Treat pace regression as a first-class risk: upstream Qwen3-TTS issue
+  `QwenLM/Qwen3-TTS#179` reports progressively faster speech across epochs.
 
 ## Minimal evaluation report template
 

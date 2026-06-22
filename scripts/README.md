@@ -184,6 +184,86 @@ bash scripts/run_sft_0_6b.sh \
   experiments/qwen3_ru_en_speaker_v1/runs/sft_0_6b_run1
 ```
 
+## Training orchestrator (prepare -> epoch -> checkpoint -> eval pack)
+
+Use the project-local orchestrator when a ready dataset manifest already exists
+and you want repeatable one-epoch training steps with metrics and eval samples:
+
+```bash
+python tools/train_voice_candidates.py \
+  --voice_name Baritone \
+  --train_raw_jsonl datasets/voices/Baritone/Ready/<run_name>/manifests/train_raw.jsonl \
+  --output_root experiments/qwen3_ru_en_speaker_v1/runs \
+  --run_name baritone_sft_candidates_001 \
+  --max_epochs 1 \
+  --speaker_name speaker_target
+```
+
+Real mode is GPU-heavy. It runs `scripts/run_prepare_data.sh`, then one
+`NUM_EPOCHS=1` training job per requested epoch through `scripts/run_sft_0_6b.sh`,
+then `scripts/run_infer_sample.py` once for each default eval phrase.
+
+Safe smoke mode does not load Qwen, Torch, or soundfile. It writes sentinel
+artifacts under `/tmp/qwen3tts_train_voice_candidates_smoke`:
+
+```bash
+bash scripts/run_train_voice_candidates_smoke.sh
+```
+
+Expected smoke artifacts:
+
+- `manifests/train_with_codes.jsonl`
+- `metrics.jsonl`
+- `candidate_manifest.json`
+- `train/epoch-0/checkpoint-epoch-0/STUB_CHECKPOINT.txt`
+- `eval/epoch-0/{01_en_short.wav,02_en_long.wav,03_en_calm.wav,04_ru_short.wav,05_ru_long.wav}`
+
+The smoke also verifies automatic Stage 4/5 rows in `metrics.jsonl`:
+
+- five `sample_metrics` rows, one per eval phrase;
+- one `checkpoint_score` row per checkpoint;
+- numeric `score`, `sample_count`, `metric_summary`, and `warnings`.
+- one `checkpoint_gate` row per checkpoint;
+- one `candidate_selection` row after the epoch loop;
+- a parseable `candidate_manifest.json` whose `candidates` do not include any
+  hard-rejected checkpoint epoch.
+
+Always-computed audio metrics are `duration_ratio`, `pace_chars_per_sec`,
+`pace_words_per_sec`, `rms_dbfs`, `clipping_ratio`, `leading_silence_ms`, and
+`trailing_silence_ms`. `whisper_text_match` is produced by the configured text
+match backend; stub mode returns a deterministic numeric match, `off` records an
+unavailable warning, and `--text_match_backend faster-whisper` lazily loads the
+real ASR backend. Configure it with `--text_match_model`,
+`--text_match_device`, `--text_match_compute_type`, or the matching
+`QWEN3TTS_TEXT_MATCH_*` environment variables. `speaker_similarity` is optional:
+use `--speaker_similarity_backend stub` only for contract tests until a real
+embedding backend is wired. Missing optional backends keep the score numeric and
+add warnings such as `speaker_similarity_unavailable`.
+
+Generated `metrics.jsonl` files, checkpoints, eval WAVs, command logs, and
+training outputs are ignored working artifacts. Generated
+`candidate_manifest.json` files are also run artifacts, not commit targets. Raw
+audio in voice `Input/` folders is also not a commit target. Do not commit any
+of these files. Commit only the orchestrator code, tests, docs, small templates,
+and intentional metadata.
+
+Hard reject reasons currently emitted by the orchestrator:
+
+- `asr_text_mismatch`: ASR/text match is too low;
+- `pace_accelerated`: speech is noticeably faster than the previous
+  non-rejected checkpoint;
+- `audio_clipping`: clipping exceeds the configured limit;
+- `duration_too_short` or `duration_too_long`: generated speech falls outside
+  the duration-ratio band;
+- `suspected_cut`: short duration plus almost no trailing silence suggests an
+  abrupt cutoff;
+- `score_drop`: score is sharply worse than the previous non-rejected
+  checkpoint.
+
+Rejected checkpoints stay auditable in `metrics.jsonl` and
+`candidate_manifest.json.rejected_checkpoints`, but they are excluded from
+`candidate_manifest.json.candidates`.
+
 ## Quick inference
 
 ```bash

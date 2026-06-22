@@ -2,10 +2,10 @@
 
 ## Current Session
 
-Status: Committed 936d7fe. Added --voice_filter_reject_initial_seconds and initial_window_rejected so audiobook/title intro speech-over-music can be excluded from manifests. Trial Ready outputs and /tmp preview inputs were deleted. Tracked tree was clean after commit except ignored raw Input audio and local env artifacts.
-Current focus: Qwen3TTS dataset cleanup after intro music was found in first accepted chunk
-Next step: For the next real Baritone dataset build, use --voice_filter_mode silero --strict_mode --voice_filter_reject_initial_seconds 30, then inspect quality_report for initial_window_rejected and spot-check accepted chunks before training.
-
+Status: ready_for_next_step.
+Current focus: Stage 5 hard-reject checkpoint gates and candidate manifests are implemented and audited.
+Next step: Use a real cleaned dataset for training, then decide whether to add copied candidate audio export and automatic stopping.
+Last updated: 2026-06-22T15:40:00Z.
 ## Active Constraints
 
 - Recallant is the main source of truth for durable memory.
@@ -14,7 +14,9 @@ Next step: For the next real Baritone dataset build, use --voice_filter_mode sil
 
 ## Open Questions
 
-- Whether a stronger music-under-speech detector/source-separation dependency should be added later for non-intro background music cases.
+- Which real training run should enable `--text_match_backend faster-whisper`.
+- Which speaker embedding backend should provide real `speaker_similarity`.
+- Whether to implement copied candidate WAV review packs before full automatic stopping.
 
 ## Recallant
 
