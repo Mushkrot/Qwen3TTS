@@ -42,14 +42,22 @@ Executed in `/ai/Qwen3TTS`:
 - `python scripts/voice_filter.py <silence.wav> --backend silero --sample_rate 16000` ❌ by design without `webrtcvad`? returns no regions and enforces strict filter failure path (no fallback-to-full path)
 - `bash scripts/run_voice_filter_smoke.sh` ✅ now runnable without `faster-whisper` in filter-only mode;
   use `QWEN3TTS_SMOKE_REQUIRE_ASR=1` for full ASR-run enforcement.
+- `QWEN3TTS_SMOKE_FORCE_FILTER_ONLY=1` also forces deterministic filter-only smoke checks when ASR is installed but model/network access is unavailable.
 
 ## Known blocker and safe-rollout precondition
 
 - `faster-whisper` is required by `scripts/build_dataset_from_audio.py` and the full smoke path.
+- Full ASR smoke currently blocked by offline environment for model download (`hf_hub` name resolution failure).
 - Error observed:
 - `ERROR: faster-whisper is required for dataset builder. Details: No module named 'faster_whisper'`
   (pipeline smoke still runs in filter-only mode by default, unless ASR enforcement is forced).
 - Install in active virtualenv before final rollout verification.
+
+Known operational command for locked-down CI:
+
+```bash
+QWEN3TTS_SMOKE_FORCE_FILTER_ONLY=1 bash scripts/run_voice_filter_smoke.sh
+```
 
 ## Final rollout command sequence
 

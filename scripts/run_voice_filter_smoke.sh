@@ -6,6 +6,7 @@ TMP_DIR="${QWEN3TTS_VOICE_FILTER_SMOKE_DIR:-/tmp/qwen3tts_voice_filter_smoke}"
 INPUT_DIR="$TMP_DIR/input"
 OUTPUT_DIR="$TMP_DIR/output"
 REQUIRE_ASR="${QWEN3TTS_SMOKE_REQUIRE_ASR:-0}"
+FORCE_FILTER_ONLY="${QWEN3TTS_SMOKE_FORCE_FILTER_ONLY:-0}"
 
 VOICE_SOURCE="${QWEN3TTS_SMOKE_VOICE_SOURCE:-${ROOT_DIR}/experiments/qwen3_ru_en_speaker_v1/samples/smoke_1_7b_epoch0_en.wav}"
 ASR_MODEL="${QWEN3TTS_SMOKE_ASR_MODEL:-tiny}"
@@ -52,14 +53,20 @@ print("1" if importlib.util.find_spec("faster_whisper") else "0")
 PY
 )"
 
-if [ "$HAS_FASTER_WHISPER" = "0" ]; then
-  if [ "$REQUIRE_ASR" = "1" ]; then
-    echo "ERROR: faster-whisper is not available and QWEN3TTS_SMOKE_REQUIRE_ASR=1."
-    echo "Install faster-whisper and rerun smoke command."
-    exit 1
+if [ "$FORCE_FILTER_ONLY" = "1" ] || [ "$HAS_FASTER_WHISPER" = "0" ]; then
+  if [ "$FORCE_FILTER_ONLY" = "1" ] && [ "$HAS_FASTER_WHISPER" = "1" ]; then
+    echo "[smoke] FORCE_FILTER_ONLY=1; skipping ASR and running filter-only smoke."
+  elif [ "$HAS_FASTER_WHISPER" = "0" ]; then
+    if [ "$REQUIRE_ASR" = "1" ]; then
+      echo "ERROR: faster-whisper is not available and QWEN3TTS_SMOKE_REQUIRE_ASR=1."
+      echo "Install faster-whisper and rerun smoke command."
+      exit 1
+    fi
+    echo "[smoke] faster-whisper not available; running filter-only smoke."
+  else
+    echo "[smoke] running filter-only smoke by request."
   fi
 
-  echo "[smoke] faster-whisper not available; running filter-only smoke."
   python - "$OUTPUT_DIR" "$INPUT_DIR" "$ROOT_DIR" <<'PY'
 import json
 import subprocess

@@ -86,6 +86,14 @@ QWEN3TTS_SMOKE_REQUIRE_ASR=1 bash scripts/run_voice_filter_smoke.sh
 
 If `QWEN3TTS_SMOKE_REQUIRE_ASR=1`, the command exits with error when `faster-whisper` is absent.
 
+Use offline-only mode when ASR dependencies/models are not reachable:
+
+```bash
+QWEN3TTS_SMOKE_FORCE_FILTER_ONLY=1 bash scripts/run_voice_filter_smoke.sh
+```
+
+This forces filter-only smoke checks even if `faster-whisper` is installed in the environment.
+
 Expected output:
 - printed acceptance and rejection summary,
 - generated manifest/report under `/tmp/qwen3tts_voice_filter_smoke/output/...`,
