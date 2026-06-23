@@ -21,8 +21,8 @@ Reference docs:
 - Primary stack: Qwen3-TTS.
 - Active training track: `Qwen/Qwen3-TTS-12Hz-1.7B-Base`.
 - `0.6B` currently in separate debug track due shape mismatch in upstream fine-tuning script.
-- Historical best checkpoint for product goals: `runs/sft_1_7b_smoke1/checkpoint-epoch-0`.
-- Current filesystem state: historical run/sample artifacts are not present in `experiments/`.
+- Historical best checkpoint for old product goals: `runs/sft_1_7b_smoke1/checkpoint-epoch-0`.
+- Current Baritone full-cycle result: `baritone_full_gpu_005_clean_text_lr2e6`.
 - Training policy: use the documented semi-automatic candidate review protocol in
   `docs/CHECKPOINT_SELECTION_PROTOCOL.md`; project-local orchestration now
   supports epoch-by-epoch checkpoints, eval packs, automatic metrics,
@@ -35,6 +35,10 @@ Reference docs:
   `winner_selection` metadata without copying checkpoints or audio.
 - Raw source audio in `datasets/voices/**/Input/` is never committed.
 - Commit code, docs, scaffolds, small config, and reproducible patches only.
+- Current 1.7B Baritone training policy: use `--learning_rate 2e-6` for the
+  real candidate run unless a new controlled experiment proves otherwise.
+  A `2e-5` full run overfit text artifacts and produced subtitle-credit
+  hallucinations in eval audio.
 
 ---
 
@@ -47,6 +51,10 @@ Reference docs:
   - `datasets/voices/Dima/{Input,Ready}`
   - `datasets/voices/Baritone/{Input,Ready}`
 - Local Baritone source audio exists under ignored `datasets/voices/Baritone/Input/`.
+- Current clean Baritone dataset exists under ignored generated output:
+  `datasets/voices/Baritone/Ready/full_gpu_002_clean_text/`.
+- Its `train_raw.jsonl` has 988 accepted rows, passed manifest validation, and
+  rejects subtitle/title-card boilerplate with `transcript_boilerplate`.
 - `.venv` has been recreated.
 - Runtime imports pass:
   - `torch` imports and CUDA is visible;
@@ -64,6 +72,22 @@ Reference docs:
   - `bash scripts/run_select_voice_candidate_smoke.sh`
   - the selection smoke chooses `candidate_B_epoch1`, verifies status metadata,
     and verifies no checkpoint/WAV/metrics copy is created by selection.
+- Full real GPU candidate run completed:
+  - run: `experiments/qwen3_ru_en_speaker_v1/runs/Baritone/baritone_full_gpu_005_clean_text_lr2e6/`;
+  - dataset: `datasets/voices/Baritone/Ready/full_gpu_002_clean_text/manifests/train_raw.jsonl`;
+  - base model: `Qwen/Qwen3-TTS-12Hz-1.7B-Base`;
+  - device: `cuda:0`;
+  - learning rate: `2e-6`;
+  - stop reason: `patience_exhausted` after epochs 0, 1, and 2;
+  - exported review pack:
+    `experiments/qwen3_ru_en_speaker_v1/samples/Baritone/baritone_full_gpu_005_clean_text_lr2e6/candidate_review/`;
+  - candidates: A/epoch-0, B/epoch-1, C/epoch-2;
+  - all selected candidates are non-rejected and have `whisper_text_match_mean=1.0`;
+  - known warnings: `leading_silence_too_long`, `speaker_similarity_unavailable`.
+- Runtime patch needed for real training is preserved as
+  `patches/qwen3-tts-sft-runtime-local-model.patch`; the live ignored
+  `external/Qwen3-TTS/finetuning/sft_12hz.py` must contain that patch on a
+  working checkout.
 - Deployment status: this repository has no long-running service or public
   deployment target for the current stage. The deploy/release gate is a
   verified local workflow snapshot: docs, tests, smoke checks, artifact hygiene,
@@ -71,9 +95,9 @@ Reference docs:
 
 ### Not restored / not ready
 
-- `experiments/qwen3_ru_en_speaker_v1/runs/` contains only scaffold, no restored checkpoint.
-- `experiments/qwen3_ru_en_speaker_v1/samples/` contains only scaffold, no restored sample pack.
-- `experiments/qwen3_ru_en_speaker_v1/manifests/train_raw.jsonl` is not present.
+- Historical pre-recovery checkpoints/sample packs are still not restored.
+- No final Baritone winner has been selected yet. The owner needs to listen to
+  candidates A/B/C and then run `tools/select_voice_candidate.py`.
 - Full ASR smoke with current local Baritone fallback is not a stable fixture and can produce `ERROR: no dataset rows produced`.
 - `.git/objects/pack/` contains old `tmp_pack_*` garbage files from a previous interrupted Git operation; do not clean them without a deliberate recovery/backup decision.
 
@@ -140,19 +164,20 @@ These items describe prior project history and may refer to generated artifacts 
 
 1. Optional `flash-attn` remains unresolved and has not been revalidated after the 2026-06-22 environment rebuild.
 2. `0.6B` fine-tune path currently fails with embedding shape mismatch in upstream script.
-3. Historical checkpoint/sample artifacts are not present in this checkout.
+3. Historical checkpoint/sample artifacts from before recovery are not present in this checkout.
 4. Current full ASR smoke requires a known-good speech fixture; raw Baritone fallback is validated only through filter-only smoke by default.
+5. Speaker-similarity scoring is still unavailable, so final voice identity choice remains human listening.
 
 ---
 
 ## Next update trigger
 
 Update this file immediately after:
-- next dataset-quality iteration is prepared and evaluated with the same phrase set.
+- the owner selects the winning Baritone candidate.
 
 ## Immediate next action
 
-1. Build a fresh dataset under `datasets/voices/Baritone/Ready/<run_name>` with `--voice_filter_reject_initial_seconds 30` for Baritone-style audiobook sources.
-2. Review quarantine/report output to confirm music/noise/non-speech rejection, including `initial_window_rejected` for title/intro chunks.
-3. Spot-check accepted chunks by ear before training.
-4. Restore or regenerate checkpoints/samples before measuring model quality.
+1. Listen to A/B/C in
+   `experiments/qwen3_ru_en_speaker_v1/samples/Baritone/baritone_full_gpu_005_clean_text_lr2e6/candidate_review/`.
+2. Select the winner with `tools/select_voice_candidate.py`.
+3. Commit only code/docs/patch/test changes, not raw audio, generated datasets, checkpoints, or candidate WAVs.

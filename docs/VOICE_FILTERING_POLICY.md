@@ -12,6 +12,8 @@ For each run, non-voice portions must not enter `train_raw.jsonl`.
 - Tone/sound effects (beeps, buzzers, alerts)
 - Long room tone / HVAC / crowd noise with no speech
 - Corrupt/garbled regions that fail detector or ASR alignment
+- Transcript/title-card boilerplate captured by ASR, including subtitle credits
+  such as "subtitles by" or "субтитры сделал"
 
 ## Kept audio policy
 
@@ -87,10 +89,15 @@ Stable parseable rejection reasons:
 - `voice_filter_detection_failed`
 - `transcription_empty`
 - `initial_window_rejected`
+- `transcript_boilerplate`
 
 Use `--voice_filter_reject_initial_seconds` for audiobook/source files with intro music or title cards.
 It is a conservative guard: any candidate chunk that starts inside the configured opening window is rejected,
 even if speech is detected there.
+
+Use `transcript_boilerplate` as a hard dataset-purity reject. These phrases are
+often ASR-visible but not valid target voice material, and they can be learned by
+the model as generation artifacts if they enter `train_raw.jsonl`.
 
 ## Quarantine
 

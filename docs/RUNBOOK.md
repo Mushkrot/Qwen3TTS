@@ -102,6 +102,18 @@ enabled and verify that early title/intro chunks are rejected with `initial_wind
 
 Do not stage raw `Input/` audio or generated `Ready/` outputs unless a small metadata file is intentionally added.
 
+Current verified Baritone full dataset:
+
+```text
+datasets/voices/Baritone/Ready/full_gpu_002_clean_text/manifests/train_raw.jsonl
+```
+
+This dataset was built on 2026-06-22 from the three ignored Baritone `Input/`
+MP3 files with CUDA ASR, strict Silero filtering, opening-window rejection, and
+manifest validation. The accepted manifest has 988 rows. Subtitle/title-card
+boilerplate such as "subtitles by" / "субтитры сделал" is rejected with
+`transcript_boilerplate` and must not appear in `train_raw.jsonl`.
+
 ## Training orchestrator
 
 Use the training orchestrator after a ready `train_raw.jsonl` exists and the
@@ -136,6 +148,35 @@ python tools/train_voice_candidates.py \
   --speaker_name speaker_target
 ```
 
+For the active `Qwen/Qwen3-TTS-12Hz-1.7B-Base` Baritone track, use the lower
+learning rate below. A real 2026-06-22 GPU run with `2e-5` learned prompt/text
+artifacts too aggressively and produced subtitle-credit hallucinations in eval
+audio. The verified full run with `2e-6` kept `whisper_text_match_mean=1.0` for
+all exported candidates.
+
+```bash
+source .venv/bin/activate
+python tools/train_voice_candidates.py \
+  --voice_name Baritone \
+  --train_raw_jsonl datasets/voices/Baritone/Ready/full_gpu_002_clean_text/manifests/train_raw.jsonl \
+  --output_root experiments/qwen3_ru_en_speaker_v1/runs \
+  --run_name baritone_full_gpu_005_clean_text_lr2e6 \
+  --min_epochs 2 \
+  --max_epochs 6 \
+  --patience 2 \
+  --top_candidates 4 \
+  --speaker_name speaker_target \
+  --base_model Qwen/Qwen3-TTS-12Hz-1.7B-Base \
+  --device cuda:0 \
+  --batch_size 1 \
+  --learning_rate 2e-6 \
+  --execution_mode real \
+  --metrics_mode audio \
+  --text_match_backend faster-whisper \
+  --text_match_device cuda \
+  --text_match_compute_type float16
+```
+
 With `--output_root experiments/qwen3_ru_en_speaker_v1/runs`, the candidate
 review pack defaults to:
 
@@ -148,6 +189,17 @@ wants a different review location.
 
 Real mode is GPU-heavy. Do not use it as a smoke test, and do not launch it
 until the dataset report shows only clean speech entering `train_raw.jsonl`.
+
+Runtime patch requirement: `external/Qwen3-TTS` is ignored by Git. Before real
+training on a fresh checkout, apply or verify
+`patches/qwen3-tts-sft-runtime-local-model.patch`. The patch keeps local
+snapshot copy behavior, uses `QWEN3_TTS_ATTN_IMPL=sdpa` by default, and reloads
+the speaker encoder from `SPEAKER_ENCODER_MODEL_PATH` when continuing
+epoch-by-epoch from a custom checkpoint.
+
+```bash
+git -C external/Qwen3-TTS apply --unidiff-zero ../../patches/qwen3-tts-sft-runtime-local-model.patch
+```
 
 Safe no-GPU smoke:
 
@@ -242,6 +294,18 @@ candidate checkpoints in `candidate_manifest.json`, export those candidates to
 `candidate_review/`, then the owner chooses the final voice by listening only
 to those exported candidates. The run no longer requires listening after every
 epoch.
+
+Current verified Baritone candidate review pack:
+
+```text
+experiments/qwen3_ru_en_speaker_v1/samples/Baritone/baritone_full_gpu_005_clean_text_lr2e6/candidate_review/
+```
+
+That run stopped automatically after epoch 2 with `patience_exhausted`, selected
+epochs 0, 1, and 2 as candidates A, B, and C, and exported five eval WAVs per
+candidate. All three candidates are non-rejected. Known warnings are
+`leading_silence_too_long` and `speaker_similarity_unavailable`; final choice is
+still by human listening.
 
 After the owner chooses a candidate, record the winner:
 

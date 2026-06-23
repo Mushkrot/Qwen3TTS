@@ -98,6 +98,9 @@ Current local source state on 2026-06-22:
 - Keep punctuation (helps prosody).
 - Remove obvious OCR/ASR garbage tokens.
 - No empty strings.
+- Reject subtitle/title-card boilerplate such as "subtitles by",
+  "created by ... subtitles", or "субтитры сделал/создал/создавал".
+  In builder output these rows are rejected with `transcript_boilerplate`.
 
 ---
 
@@ -115,7 +118,11 @@ Required files for first cycle:
 
 Current state:
 - `train_raw.template.jsonl` exists as a schema example.
-- Real `train_raw.jsonl` and `train_with_codes.jsonl` are not present in the repository.
+- A current local Baritone training manifest exists at
+  `datasets/voices/Baritone/Ready/full_gpu_002_clean_text/manifests/train_raw.jsonl`.
+- That manifest is generated working data and is intentionally ignored by Git.
+- `train_with_codes.jsonl` is generated inside each training run by
+  `tools/train_voice_candidates.py`.
 - Generated manifests may be committed only when they are small, reproducible, and do not expose private/source paths that should remain local.
 
 Optional:

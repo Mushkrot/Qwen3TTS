@@ -1465,6 +1465,7 @@ def build_train_command(
             "INIT_MODEL_PATH": init_model_path,
             "NUM_EPOCHS": "1",
             "SPEAKER_NAME": args.speaker_name,
+            "SPEAKER_ENCODER_MODEL_PATH": args.base_model,
             "BATCH_SIZE": str(args.batch_size),
             "LR": str(args.learning_rate),
         }

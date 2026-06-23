@@ -29,6 +29,11 @@ SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", "
 PUNCT_NO_SPACE_BEFORE = {".", ",", "!", "?", ":", ";", ")", "]", "}"}
 PUNCT_NO_SPACE_AFTER = {"(", "[", "{"}
 VOICE_FILTER_VERSION = "2.0.0"
+TRANSCRIPT_BOILERPLATE_PATTERNS = (
+    re.compile(r"\bсубтитр[ыаов]*\s+(?:сделал[аи]?|создал[аи]?|создавал[аи]?|подготовил[аи]?)\b", re.IGNORECASE),
+    re.compile(r"\bsubtitles?\s+(?:by|created|made|prepared)\b", re.IGNORECASE),
+    re.compile(r"\b(?:created|made|prepared)\s+by\s+.+\bsubtitles?\b", re.IGNORECASE),
+)
 
 
 @dataclass
@@ -330,6 +335,10 @@ def join_tokens(tokens: Iterable[str]) -> str:
     return " ".join(out).strip()
 
 
+def contains_transcript_boilerplate(text: str) -> bool:
+    return any(pattern.search(text) for pattern in TRANSCRIPT_BOILERPLATE_PATTERNS)
+
+
 def segment_overlap_ratio(start_sec: float, end_sec: float, speech_regions: list[VoiceRegion]) -> float:
     if not speech_regions:
         return 0.0
@@ -554,6 +563,8 @@ def evaluate_segment_quality(
         reasons.append("avg_confidence_too_low")
     if low_conf_ratio > args.max_low_conf_ratio:
         reasons.append("too_many_low_confidence_words")
+    if contains_transcript_boilerplate(text):
+        reasons.append("transcript_boilerplate")
     if args.voice_filter_mode != "off" and speech_ratio < min_coverage:
         reasons.append("non_voice_ratio_too_high")
     if args.voice_filter_mode != "off" and source_duration * 1000 < args.voice_filter_min_speech_ms:

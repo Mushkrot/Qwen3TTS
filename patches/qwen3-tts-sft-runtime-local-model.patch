@@ -1,33 +1,60 @@
 diff --git a/finetuning/sft_12hz.py b/finetuning/sft_12hz.py
-index 6ec80c8..b09ee71 100644
+index 6ec80c8..6666af4 100644
 --- a/finetuning/sft_12hz.py
 +++ b/finetuning/sft_12hz.py
-@@ -21,6 +21,7 @@ import shutil
- import torch
- from accelerate import Accelerator
- from dataset import TTSDataset
+@@ -23,0 +24,2 @@ from dataset import TTSDataset
 +from huggingface_hub import snapshot_download
- from qwen_tts.inference.qwen3_tts_model import Qwen3TTSModel
- from safetensors.torch import save_file
- from torch.optim import AdamW
-@@ -46,1 +47,4 @@ def train():
-     MODEL_PATH = args.init_model_path
++from qwen_tts.core.models.modeling_qwen3_tts import Qwen3TTSSpeakerEncoder
+@@ -24,0 +27 @@ from qwen_tts.inference.qwen3_tts_model import Qwen3TTSModel
++from safetensors import safe_open
+@@ -30,0 +34,34 @@ target_speaker_embedding = None
++
++
++def ensure_training_speaker_encoder(model, source_model_path):
++    if model.speaker_encoder is not None:
++        return
++
++    local_source_path = (
++        source_model_path
++        if os.path.isdir(source_model_path)
++        else snapshot_download(source_model_path)
++    )
++    weights_path = os.path.join(local_source_path, "model.safetensors")
++    if not os.path.isfile(weights_path):
++        raise FileNotFoundError(
++            f"speaker encoder source has no model.safetensors: {weights_path}"
++        )
++
++    speaker_encoder = Qwen3TTSSpeakerEncoder(model.config.speaker_encoder_config)
++    state_dict = {}
++    with safe_open(weights_path, framework="pt", device="cpu") as handle:
++        for key in handle.keys():
++            if key.startswith("speaker_encoder."):
++                state_dict[key.removeprefix("speaker_encoder.")] = handle.get_tensor(key)
++
++    if not state_dict:
++        raise RuntimeError(
++            f"speaker encoder source has no speaker_encoder weights: {source_model_path}"
++        )
++
++    speaker_encoder.load_state_dict(state_dict, strict=True)
++    speaker_encoder.to(dtype=model.dtype)
++    model.speaker_encoder = speaker_encoder
++
++
+@@ -46,0 +84,3 @@ def train():
 +    local_model_path = MODEL_PATH if os.path.isdir(MODEL_PATH) else snapshot_download(MODEL_PATH)
 +
 +    attn_impl = os.environ.get("QWEN3_TTS_ATTN_IMPL", "sdpa")
-@@ -50,5 +54,5 @@ def train():
-     qwen3tts = Qwen3TTSModel.from_pretrained(
-         MODEL_PATH,
-         torch_dtype=torch.bfloat16,
+@@ -51 +91 @@ def train():
 -        attn_implementation="flash_attention_2",
 +        attn_implementation=attn_impl,
-     )
-@@ -126,3 +130,3 @@ def train():
-         if accelerator.is_main_process:
-             output_dir = os.path.join(args.output_model_path, f"checkpoint-epoch-{epoch}")
+@@ -52,0 +93,2 @@ def train():
++    speaker_encoder_source = os.environ.get("SPEAKER_ENCODER_MODEL_PATH", args.init_model_path)
++    ensure_training_speaker_encoder(qwen3tts.model, speaker_encoder_source)
+@@ -128 +170 @@ def train():
 -            shutil.copytree(MODEL_PATH, output_dir, dirs_exist_ok=True)
 +            shutil.copytree(local_model_path, output_dir, dirs_exist_ok=True)
-@@ -130,2 +134,2 @@ def train():
+@@ -130 +172 @@ def train():
 -            input_config_file = os.path.join(MODEL_PATH, "config.json")
 +            input_config_file = os.path.join(local_model_path, "config.json")
-             output_config_file = os.path.join(output_dir, "config.json")
