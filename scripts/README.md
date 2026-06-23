@@ -45,7 +45,7 @@ external transcription/source project when explicitly needed.
 source .venv/bin/activate
 python scripts/build_dataset_from_audio.py \
   --input_dir /path/to/raw_audio \
-  --output_root experiments/qwen3_ru_en_speaker_v1/dataset_auto \
+  --output_root datasets/voices/<VoiceName>/Ready/dataset_auto \
   --language ru \
   --voice_filter_mode silero \
   --voice_filter_min_speech_ms 300 \
@@ -64,6 +64,10 @@ Output:
 - quality report: `.../dataset_auto/reports/quality_report.{json,csv}`
 - optional quarantine: `.../dataset_auto/filtered_out/removed_segments.jsonl`, snippets: `.../dataset_auto/filtered_out/snippets/*.wav`
 - run metadata: `.../dataset_auto/filtered_out/run_metadata.json`
+
+Owner-facing audio samples should also go under
+`datasets/voices/<VoiceName>/Ready/<purpose>/`. Use `experiments/` only for
+technical training scratch such as large checkpoints and temporary eval packs.
 
 Optional:
 - pass fixed reference voice with `--ref_audio /path/to/ref.wav`

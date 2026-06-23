@@ -16,6 +16,8 @@ Synchronization and dubbing pipeline orchestration are intentionally out of scop
 - Architecture: `docs/ARCHITECTURE.md`
 - Operational runbook: `docs/RUNBOOK.md`
 - Artifact and data policy: `docs/ARTIFACT_POLICY.md`
+- Long-form TTS findings: `docs/LONG_FORM_TTS_FINDINGS_2026-06-23.md`
+- Next TTS strategy: `docs/NEXT_TTS_STRATEGY_2026-06-23.md`
 - Dataset contract: `docs/DATASET_CONTRACT.md`
 - Voice filtering policy: `docs/VOICE_FILTERING_POLICY.md`
 - Voice filtering rollout notes: `docs/VOICE_FILTERING_ROLLOUT_NOTES.md`
@@ -27,9 +29,11 @@ Synchronization and dubbing pipeline orchestration are intentionally out of scop
 
 ## Working assets
 
-- Experiment workspace: `experiments/qwen3_ru_en_speaker_v1/`
+- Human voice workspace: `datasets/voices/<VoiceName>/{Input,Ready}`
+- Technical experiment scratch: `experiments/qwen3_ru_en_speaker_v1/`
 - Helper scripts: `scripts/README.md`
-- Project-local voice scaffold: `datasets/voices/<VoiceName>/{Input,Ready}`
+- Generated listening audio should be copied or written under
+  `datasets/voices/<VoiceName>/Ready/<purpose>/`.
 
 ## Current baseline decisions
 
@@ -37,7 +41,10 @@ Synchronization and dubbing pipeline orchestration are intentionally out of scop
 - Active production-candidate lineage in docs: `Qwen/Qwen3-TTS-12Hz-1.7B-Base`
 - `0.6B` remains a debug track because upstream fine-tuning had an embedding-shape mismatch.
 - Raw audio placed under `datasets/voices/**/Input/` is local source material and is never committed.
-- Generated chunks, manifests, checkpoints, and samples are generated artifacts unless a small template/scaffold file is explicitly tracked.
+- Generated chunks, manifests, checkpoints, and samples are generated artifacts
+  unless a small template/scaffold file is explicitly tracked.
+- The 2026-06-23 cleanup reduced `experiments/` back to scaffolds/templates.
+  Useful local listening samples now live under `datasets/voices/**/Ready/`.
 
 ## Current repository state
 

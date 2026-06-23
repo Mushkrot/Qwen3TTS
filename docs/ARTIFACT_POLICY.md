@@ -17,6 +17,7 @@ Do not commit large or private working artifacts:
 
 - raw source audio under `datasets/voices/**/Input/`;
 - processed chunks under `datasets/voices/**/Ready/`;
+- generated listening WAVs under `datasets/voices/**/Ready/`;
 - generated checkpoints under `experiments/**/runs/`;
 - generated sample WAVs under `experiments/**/samples/`;
 - generated candidate review packs under `experiments/**/samples/**/candidate_review/`;
@@ -40,6 +41,22 @@ datasets/voices/Baritone/Input/Baritone3.mp3
 ```
 
 They must remain available from the original source outside Git.
+
+## Human-facing output location
+
+Use `datasets/voices/<VoiceName>/Ready/<purpose>/` for audio that the owner
+should browse or listen to. Examples:
+
+```text
+datasets/voices/Aiden/Ready/builtin_quality_2026-06-23/
+datasets/voices/Ryan/Ready/builtin_quality_2026-06-23/
+datasets/voices/Baritone/Ready/prosody_control_2026-06-23/
+```
+
+Use `experiments/` only as technical scratch for generated training runs,
+checkpoints, and temporary evaluation packs. Important listening outputs should
+be copied into the matching voice `Ready/` directory before cleaning
+`experiments/`.
 
 ## Safe cleanup rule
 

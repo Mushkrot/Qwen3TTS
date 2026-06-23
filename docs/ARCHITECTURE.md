@@ -15,11 +15,13 @@ Synchronization, video alignment, muxing, and full dubbing orchestration are out
 ```text
 docs/                         Canonical project guidance
 scripts/                      Local helper CLIs and shell wrappers
-datasets/voices/<Voice>/      Project-local voice workspace
+datasets/voices/<Voice>/      Human voice workspace
+  Input/                      Raw source recordings for that voice
+  Ready/                      Prepared data and generated listening samples
 experiments/qwen3_ru_en_speaker_v1/
   manifests/                  Manifest templates and generated JSONL files
-  runs/                       Generated training runs/checkpoints
-  samples/                    Generated evaluation samples
+  runs/                       Technical scratch for generated training runs/checkpoints
+  samples/                    Technical scratch for generated evaluation samples
   notes/                      Small run notes
 external/Qwen3-TTS/           Ignored upstream clone
 patches/                      Tracked local patches for ignored upstream code
@@ -35,6 +37,10 @@ patches/                      Tracked local patches for ignored upstream code
 6. Run SFT through `scripts/run_sft_0_6b.sh` or an equivalent 1.7B command.
 7. Generate samples with `scripts/run_infer_sample.py`.
 8. Evaluate with `docs/EVAL_PHRASE_SET.md`.
+
+For owner-facing listening files, prefer
+`datasets/voices/<Voice>/Ready/<purpose>/<language>/`. Treat `experiments/` as
+rebuildable local scratch, not as the place to browse final audio.
 
 ## Voice filtering
 
