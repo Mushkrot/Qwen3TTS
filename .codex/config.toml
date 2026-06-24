@@ -1,9 +1,8 @@
 [mcp_servers.recallant]
 command = "recallant"
 args = ["mcp-server"]
-env = { RECALLANT_PROJECT_ID = "f6ead963-0af2-4d00-bfda-01d5e124e4d8", RECALLANT_DEVELOPER_ID = "6e622b69-6261-4072-bd56-3656903c610d", RECALLANT_PROJECT_PATH = "/ai/Qwen3TTS" }
+env = { RECALLANT_PROJECT_ID = "f6ead963-0af2-4d00-bfda-01d5e124e4d8", RECALLANT_DEVELOPER_ID = "7ebb3031-7926-4102-9ebd-540c76eebd27", RECALLANT_PROJECT_PATH = "/ai/Qwen3TTS" }
 env_vars = ["RECALLANT_DATABASE_URL"]
-
 [mcp_servers.recallant.tools.memory_get_context_pack]
 approval_mode = "approve"
 
