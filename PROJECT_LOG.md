@@ -2,9 +2,9 @@
 
 ## Current Session
 
-Status: Cleanup and docs are ready to commit. Useful generated audio was copied into datasets/voices/Aiden/Ready/builtin_quality_2026-06-23, datasets/voices/Ryan/Ready/builtin_quality_2026-06-23, and datasets/voices/Baritone/Ready/prosody_control_2026-06-23. Ignored generated artifacts under experiments/qwen3_ru_en_speaker_v1 were removed, leaving only tracked scaffolds/templates. Docs now record that Russian long-form with the trained Baritone voice is not viable, built-in Aiden/Ryan English 02_quality_longer_chunks is the best current Qwen3TTS reading result, and the next Qwen3TTS test should use a native-English source speaker with desired timbre.
-Current focus: Qwen3TTS long-form cleanup/documentation after built-in Aiden/Ryan samples showed better English reading than the trained Russian Baritone voice.
-Next step: Commit the cleanup/docs/scripts/scaffolds, then wait for the owner to provide native-English speaker audio under datasets/voices/<NewVoice>/Input for the next training experiment.
+Status: Recallant project-side repair is complete in commit 78783ad. Previous TTS long-form cleanup/documentation work remains in progress: useful generated audio was copied under datasets/voices/Aiden/Ready/builtin_quality_2026-06-23, datasets/voices/Ryan/Ready/builtin_quality_2026-06-23, and datasets/voices/Baritone/Ready/prosody_control_2026-06-23; docs record that Russian long-form with trained Baritone is not viable, built-in Aiden/Ryan English 02_quality_longer_chunks is the best current Qwen3TTS reading result, and the next Qwen3TTS test should use a native-English source speaker with the desired timbre.
+Current focus: Qwen3TTS work can resume; Recallant project-side connection is repaired
+Next step: Next agent should start with memory_start_session and memory_get_context_pack, then continue the original work by reviewing the existing docs/NEXT_TTS_STRATEGY_2026-06-23.md change and .supergoal/narrate-chapter-mag-edinstvo-skomorokh-w-WFIROk/. If live CLI proof is required, run recallant doctor --project-dir /ai/Qwen3TTS --require-capture --format json only with explicit live-host approval.
 
 ## Active Constraints
 
